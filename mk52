@@ -1,0 +1,10 @@
+#!/bin/sh
+# The mk52 command (cli/main.ml), from any design folder: the tool is built first if its
+# sources have changed, then run where it was called. If another build holds the tool's
+# build folder, what is already built is run.
+home=$(cd "$(dirname "$0")" && pwd -P) || exit 2
+out=$(cd "$home" && dune build cli/main.exe tools/entries.exe 2>&1) || case "$out" in
+  *"locked the build directory"*) ;;
+  *) printf '%s\n' "$out" >&2; exit 2 ;;
+esac
+MK52_HOME="$home" exec "$home/_build/default/cli/main.exe" "$@"

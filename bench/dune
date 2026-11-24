@@ -1,0 +1,5 @@
+(executable
+ (name bench)
+ (libraries mk52 models unix)
+ (ocamlopt_flags
+  (:standard -O3 -inline 200)))

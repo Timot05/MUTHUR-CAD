@@ -1,0 +1,6 @@
+(library
+ (name mk52)
+ (public_name mk52)
+ (libraries unix)
+ (ocamlopt_flags
+  (:standard -O3 -inline 200)))

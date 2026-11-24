@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (libraries mk52 models unix threads.posix)
+ (ocamlopt_flags
+  (:standard -O3 -inline 200)))

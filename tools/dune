@@ -1,0 +1,3 @@
+(executable
+ (name entries)
+ (modules entries))

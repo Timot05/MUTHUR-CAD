@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mk52": {
+      "command": "./mk52",
+      "args": ["mcp"]
+    }
+  }
+}

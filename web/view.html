@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mk52</title>
+<!-- The page: the window on a design folder, served by cli/serve.ml (mk52 open). Beside
+     the picture, what is open, what could be opened, and the features of the model in
+     front. The picture is a ray a pixel, marched on the graphics card through the
+     function the kernel wrote for the model (lib/shader.ml), with WebGPU. The page holds
+     no model and does no geometry: what is drawn, and what a click hit, it asks. -->
+<style>
+  /* An instrument's side panel: cool neutral greys, one blue for what is picked out. */
+  :root { color-scheme: light dark; --panel: #f7f8f9; --raise: #ffffff; --ink: #1b1d21; --soft: #676d76; --line: #dfe2e7; --hover: #eceef2; --accent: #2458c5; --view: #e6e8ec; --bad: #c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --panel: #1d1f23; --raise: #25282d; --ink: #e8eaed; --soft: #9aa0a9; --line: #32363c; --hover: #2a2d33; --accent: #86aaf2; --view: #131417; --bad: #e0705f; } }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  /* the page itself never scrolls: it is the window, and only the lists inside it move */
+  html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+  body { display: flex; background: var(--view); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; }
+  aside { width: 308px; flex: none; display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--panel); border-right: 1px solid var(--line); }
+  main { flex: 1; position: relative; min-width: 0; height: 100%; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; outline: none; }
+  canvas:active { cursor: grabbing; }
+
+  /* ---- A section: a header that opens and closes it, and a body that scrolls ---- */
+  .panel { display: flex; flex-direction: column; flex: none; min-height: 0; max-height: 34%; border-bottom: 1px solid var(--line); }
+  .panel.open.fill { flex: 1 1 0; max-height: none; }
+  .head { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 9px; width: 100%; height: 36px; flex: none; padding: 0 14px; font-weight: 600; cursor: pointer; }
+  .head:hover { background: var(--hover); }
+  .sum { margin-left: auto; min-width: 0; font-weight: 400; color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chev { width: 7px; height: 7px; flex: none; border-right: 1.5px solid var(--soft); border-bottom: 1.5px solid var(--soft); transform: rotate(-45deg); }
+  .open > .head .chev, .row.open > .chev { transform: translateY(-2px) rotate(45deg); }
+  .body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 14px 12px; }
+  .panel:not(.open) .body { display: none; }
+  @media (prefers-reduced-motion: no-preference) { .chev { transition: transform .12s; } }
+  .empty { margin: 4px 0; color: var(--soft); }
+
+  /* ---- Rows: one line each ---- */
+  .row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; margin: 0 -8px; border-radius: 6px; cursor: pointer; }
+  .row:hover { background: var(--hover); }
+  .row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .row.front .name { font-weight: 600; }
+  .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.face .name, .row .meta { color: var(--soft); }
+  .row.face.on .name { color: var(--ink); }
+  .row .meta { font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  a { color: var(--soft); font-size: 12px; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  a:hover { color: var(--accent); text-decoration: underline; }
+  /* a quiet action: words alone */
+  .text { all: unset; box-sizing: border-box; padding: 1px 5px; border-radius: 4px; color: var(--soft); font-size: 12px; white-space: nowrap; cursor: pointer; }
+  .text:hover { color: var(--ink); background: var(--hover); }
+  .text.on { color: var(--accent); }
+  /* a row's actions lie over its right end, so a name has the whole row; they show when
+     the row is under the pointer, reached by keyboard, or one of them is in use */
+  .acts { position: absolute; right: 4px; top: 3px; bottom: 3px; display: none; align-items: center; gap: 4px; padding: 0 4px 0 8px; border-radius: 5px; background: var(--panel); }
+  .row:hover .acts, .row:focus-within .acts, .acts:has(.on) { display: flex; }
+  :is(.head, .row, .text, a, #viewbar button):focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  /* ---- Under the lists: what is being built, what went wrong, how large the model is ---- */
+  #status { flex: none; padding: 9px 14px; color: var(--soft); font-variant-numeric: tabular-nums; }
+  #status:empty { display: none; }
+  #said { max-height: 170px; margin: 0; overflow: auto; color: var(--bad); white-space: pre-wrap; font: 12px/1.35 ui-monospace, monospace; user-select: text; }
+
+  /* ---- Over the picture ---- */
+  #viewbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 10px rgba(0, 0, 0, .10); }
+  #viewbar button { all: unset; box-sizing: border-box; height: 26px; padding: 0 11px; border-radius: 6px; color: var(--soft); white-space: nowrap; cursor: pointer; }
+  #viewbar button:hover { color: var(--ink); background: var(--hover); }
+  #viewbar button[aria-pressed="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #viewbar button:disabled { opacity: .45; pointer-events: none; }
+  #viewbar hr { width: 1px; height: 18px; margin: 4px 5px; border: 0; background: var(--line); }
+  #clicked { position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px); display: flex; align-items: baseline; gap: 10px; padding: 6px 11px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .08); }
+  #clicked b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #clicked span { color: var(--soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--soft); text-align: center; pointer-events: none; }
+</style>
+
+<aside>
+  <section class="panel open" id="open"><button class="head" aria-expanded="true"><i class="chev"></i>Open<span class="sum"></span></button><div class="body"></div></section>
+  <section class="panel open fill" id="functions"><button class="head" aria-expanded="true"><i class="chev"></i>Functions<span class="sum"></span></button><div class="body"></div></section>
+  <section class="panel open fill" id="features"><button class="head" aria-expanded="true"><i class="chev"></i>Features<span class="sum"></span></button><div class="body"></div></section>
+  <div id="status"></div>
+</aside>
+<main>
+  <canvas tabindex="0" aria-label="The model"></canvas>
+  <div id="notice" hidden></div>
+  <div id="clicked" hidden></div>
+  <div id="viewbar">
+    <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found">Edges</button>
+    <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
+    <button id="showFrames" aria-pressed="true" title="The frames its features sit in">Frames</button>
+    <hr>
+    <button id="extract" title="Find the model's edges and corners (mk52 extract) and draw them">Find edges</button>
+    <button id="fit" title="Fit the model in the picture (F)">Fit</button>
+  </div>
+</main>
+
+<script type="module">
+const $ = id => document.getElementById(id)
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids.flat().filter(k => k != null && k !== false)); return e }
+const add = (a, b) => a.map((v, i) => v + b[i]), sub = (a, b) => a.map((v, i) => v - b[i]), times = (a, k) => a.map(v => v * k)
+const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0), length = a => Math.hypot(...a), unit = a => times(a, 1 / length(a))
+const canvas = document.querySelector('canvas')
+
+// ---- What the page knows and shows ----
+
+// The design's projects with their functions, the models that are open, the one in front
+// (`scene`: it as it is drawn, null until its first shader is ready), and what is picked
+// out in it: a feature (0: none), a face by the shader's number (-1: none), a feature
+// shown alone (0: the whole model), and the last point clicked.
+let projects = [], opened = [], current = null, scene = null, edges = null
+let feature = 0, face = -1, solo = 0, picked = null
+const show = { edges: true, sketches: true, frames: true }
+let said = '', building = false, asking = 0, took = null
+// what was last seen of the folder: the model in front as the command wrote it, and the
+// note of which model to bring to the front
+let written = null, fronted = null, taking = 0
+const fitted = new Set(), shut = new Set()
+
+// ---- The camera ----
+// It turns about a point (the middle of the model's box unless it has been slid
+// somewhere), from `distance` box diagonals away, z up. The kernel's own pictures use
+// the same one (lib/render.ml).
+
+const tanHalf = Math.tan(0.35)
+const camera = { yaw: 0.7, pitch: 0.45, distance: 2.6, target: null }
+
+function placed() {
+  const { lo, hi } = scene, centre = camera.target ?? times(add(lo, hi), 0.5), diagonal = length(sub(hi, lo))
+  const cp = Math.cos(camera.pitch), sp = Math.sin(camera.pitch), cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw)
+  const forward = [-cp * cy, -cp * sy, -sp]
+  // the near plane comes in with the eye, so that a surface looked at closely is not cut
+  return { centre, diagonal, forward, right: [-sy, cy, 0], up: [-sp * cy, -sp * sy, cp], eye: sub(centre, times(forward, camera.distance * diagonal)),
+           near: diagonal * Math.min(0.02, camera.distance * 0.05), far: diagonal * 40 }
+}
+
+// Back just far enough that the whole box fits in the picture.
+function fit() {
+  camera.target = null
+  camera.distance = Math.min(8, 1.08 * 0.5 / Math.sin(Math.atan(tanHalf * Math.min(1, canvas.width / canvas.height))))
+  changed()
+}
+
+// The ray through a point of the picture, in its pixels from its top left.
+const ray = (p, x, y) => unit(add(p.forward, times(add(times(p.right, (2 * x - canvas.width) / canvas.height), times(p.up, (canvas.height - 2 * y) / canvas.height)), tanHalf)))
+
+// The world to the picture, as WebGPU clips it (depth 0 at the near plane, 1 at the far), column by column.
+function projection(p, aspect) {
+  const k = p.far / (p.far - p.near)
+  const rows = [[...times(p.right, 1 / (tanHalf * aspect)), -dot(p.right, p.eye) / (tanHalf * aspect)], [...times(p.up, 1 / tanHalf), -dot(p.up, p.eye) / tanHalf],
+                [...times(p.forward, k), -k * (dot(p.forward, p.eye) + p.near)], [...p.forward, -dot(p.forward, p.eye)]]
+  return [0, 1, 2, 3].flatMap(column => rows.map(row => row[column]))
+}
+
+// ---- The shaders ----
+// The model itself is not here: the kernel writes model() for each model, and it is
+// compiled between `shared` and `marching`.
+
+const shared = `
+struct Uniforms {
+  eye: vec4f, forward: vec4f, right: vec4f, up: vec4f,  // the camera
+  lo: vec4f, hi: vec4f,                                 // the model's box
+  back: vec4f,                                          // the colour behind the model
+  grid: vec4f,                                          // the gates' grid: where it starts, and a cell's side
+  size: vec4f,                                          // the picture's width and height, tan of half the view, the march's step
+  depth: vec4f,                                         // how near the surface counts as on it, the near plane, the far plane
+  cells: vec4i,                                         // the grid's cells along x, y and z
+  chosen: vec4i,                                        // the feature picked out, the last feature made in it, the face picked out (-1: none)
+  project: mat4x4f,                                     // the world to the picture, for what is drawn over the model
+  line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel
+}
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var table: texture_2d<u32>;      // where the model's gates are entered
+`
+
+// The model: a ray a pixel, marched through the kernel's model().
+const marching = `
+@vertex fn whole(@builtin(vertex_index) id: u32) -> @builtin(position) vec4f {
+  return vec4f(vec2f(f32((id << 1u) & 2u), f32(id & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+}
+struct Seen { @location(0) colour: vec4f, @builtin(frag_depth) depth: f32 }
+@fragment fn marched(@builtin(position) at: vec4f) -> Seen {
+  let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
+  let ro = u.eye.xyz;
+  let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
+  let t0 = (u.lo.xyz - ro) / rd; let t1 = (u.hi.xyz - ro) / rd;
+  let nearer = min(t0, t1); let further = max(t0, t1);
+  let tn = max(max(nearer.x, nearer.y), max(nearer.z, 0.0));
+  let tf = min(min(further.x, further.y), further.z);
+  var seen: Seen; seen.colour = vec4f(u.back.xyz, 1.0); seen.depth = 1.0;
+  if (tn >= tf) { return seen; }
+  // Sphere tracing inside the model's box, then four taps round the hit for the
+  // normal: one loop, so model() is written into the shader once.
+  var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
+  var t = tn; var hit = false; var h = vec3f(0); var n = vec3f(0); var face = -1; var feat = 0; var k = 0;
+  for (var i = 0; i < 400; i++) {
+    var q = ro + rd * t;
+    if (hit) { q = h + u.depth.x * taps[k]; }
+    var f = 0; var ft = 0;
+    let d = model(q, &f, &ft, table, u.grid.xyz, u.grid.w, u.cells.xyz);
+    if (!hit) {
+      // Where the box cuts the solid the ray starts inside it, and goes on to the
+      // surface from within: a cut is left open, so a cavity shows through it.
+      if (abs(d) < u.depth.x) { hit = true; h = q; face = f; feat = ft; }
+      else { t += abs(d) * u.size.w; if (t > tf) { break; } }
+    } else { n += taps[k] * d; k++; if (k == 4) { break; } }
+  }
+  if (!hit) { return seen; }
+  // the hit's depth as the projection writes it, for what is drawn over the model
+  let along = dot(h - ro, u.forward.xyz);
+  seen.depth = clamp(u.depth.z / (u.depth.z - u.depth.y) * (1.0 - u.depth.y / along), 0.0, 1.0);
+  n = normalize(n);
+  let within = dot(n, rd) > 0.0;  // seen from inside the solid
+  if (within) { n = -n; }
+  let hue = fract(f32(face) * 0.61803398875);
+  var base = 0.62 + 0.26 * cos(6.2831853 * (hue + vec3f(0.0, 0.33, 0.67)));
+  // a feature and all made inside it: their ids run from chosen.x to chosen.y
+  if ((u.chosen.x > 0 && (feat < u.chosen.x || feat > u.chosen.y)) || (u.chosen.z >= 0 && face != u.chosen.z)) { base = vec3f(0.58); }
+  if (within) { base *= 0.72; }
+  let light = 0.38 + 0.62 * max(dot(n, normalize(-rd + 0.45 * u.up.xyz - 0.3 * u.right.xyz)), 0.0);
+  seen.colour = vec4f(base * light, 1.0);
+  return seen;
+}
+`
+
+// What is drawn over the model: lines a few pixels wide and round dots, each a quad of
+// six corners. They are drawn twice: faintly where the model hides them, plainly where
+// it does not.
+const over = `
+override faint: f32 = 1.0;
+struct Drawn { @builtin(position) position: vec4f, @location(0) colour: vec4f, @location(1) at: vec2f }
+fn placed(p: vec3f) -> vec4f { return u.project * vec4f(p + normalize(u.eye.xyz - p) * u.line.x, 1.0); }
+// A line from a to b, half a width in pixels to each side.
+@vertex fn line_vertex(@builtin(vertex_index) id: u32, @location(0) a: vec3f, @location(1) b: vec3f, @location(2) colour: vec4f, @location(3) half: f32) -> Drawn {
+  var corners = array<vec2f, 6>(vec2f(0, -1), vec2f(1, -1), vec2f(1, 1), vec2f(0, -1), vec2f(1, 1), vec2f(0, 1));  // how far along, which side
+  let corner = corners[id];
+  let ca = placed(a); let cb = placed(b);
+  var d = (cb.xy / cb.w - ca.xy / ca.w) * u.size.xy;
+  if (length(d) > 0.0) { d = normalize(d); } else { d = vec2f(1, 0); }
+  let q = mix(ca, cb, corner.x);
+  return Drawn(vec4f(q.xy + vec2f(-d.y, d.x) * corner.y * half * u.line.y * 2.0 / u.size.xy * q.w, q.zw), vec4f(colour.rgb, colour.a * faint), vec2f(0));
+}
+// A dot: where, its colour, and how wide in pixels.
+@vertex fn dot_vertex(@builtin(vertex_index) id: u32, @location(0) at: vec3f, @location(1) colour: vec4f, @location(2) size: f32) -> Drawn {
+  var corners = array<vec2f, 6>(vec2f(-1, -1), vec2f(1, -1), vec2f(1, 1), vec2f(-1, -1), vec2f(1, 1), vec2f(-1, 1));
+  let q = placed(at);
+  return Drawn(vec4f(q.xy + corners[id] * size * u.line.y / u.size.xy * q.w, q.zw), vec4f(colour.rgb, colour.a * faint), corners[id]);
+}
+@fragment fn line_fragment(in: Drawn) -> @location(0) vec4f { return in.colour; }
+@fragment fn dot_fragment(in: Drawn) -> @location(0) vec4f {
+  if (length(in.at) > 1.0) { discard; }
+  return in.colour;
+}
+`
+
+// ---- Drawing ----
+
+let device, context, format, bound, layout, uniforms, depth, model = null, timer = null
+// what is drawn over the model, a line or a dot an instance: [pipeline hidden, pipeline in front], its buffer, how many
+const lines = { floats: 11, buffer: null, count: 0 }, dots = { floats: 8, buffer: null, count: 0 }
+
+async function graphics() {
+  const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' })
+  if (!adapter) throw new Error('This browser does not offer WebGPU, which the picture is drawn with. A recent Chrome, Edge or Safari has it.')
+  const timed = adapter.features.has('timestamp-query')
+  device = await adapter.requestDevice({ requiredFeatures: timed ? ['timestamp-query'] : [] })
+  device.lost.then(() => { said = 'The graphics card was lost to the page. Load the page again.'; model = null; panel() })
+  context = canvas.getContext('webgpu')
+  format = navigator.gpu.getPreferredCanvasFormat()
+  context.configure({ device, format, alphaMode: 'opaque' })
+  bound = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } }] })
+  layout = device.createPipelineLayout({ bindGroupLayouts: [bound] })
+  uniforms = device.createBuffer({ size: 272, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+  const module = device.createShaderModule({ code: shared + over })
+  const blend = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } }
+  const pipelines = (name, attributes) => [['greater', 0.22], ['less-equal', 1]].map(([depthCompare, faint]) => {
+    let offset = 0
+    return device.createRenderPipeline({
+      layout,
+      vertex: { module, entryPoint: name + '_vertex', constants: { faint },
+                buffers: [{ stepMode: 'instance', arrayStride: 4 * attributes.reduce((s, n) => s + n, 0),
+                            attributes: attributes.map((n, i) => { const a = { shaderLocation: i, offset, format: n == 1 ? 'float32' : 'float32x' + n }; offset += 4 * n; return a }) }] },
+      fragment: { module, entryPoint: name + '_fragment', targets: [{ format, blend }] },
+      depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare },
+    })
+  })
+  lines.pipelines = pipelines('line', [3, 3, 4, 1])
+  dots.pipelines = pipelines('dot', [3, 4, 1])
+  // how long the graphics card takes over a picture, where it will say
+  if (timed) timer = { queries: device.createQuerySet({ type: 'timestamp', count: 2 }), resolved: device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }),
+                       read: device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), reading: false }
+  new ResizeObserver(sized).observe(canvas)
+  sized()
+}
+
+// The picture has the canvas's size in device pixels, and a depth to go with it.
+function sized() {
+  const w = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio)), h = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio))
+  if (depth && canvas.width == w && canvas.height == h) return
+  canvas.width = w; canvas.height = h
+  depth?.destroy()
+  depth = device.createTexture({ size: [w, h], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT })
+  draw()
+}
+
+// A model's shader compiled (a large one takes a second or more: the one before is drawn
+// until then) and its gates' table made a texture.
+async function compiled(s, table) {
+  const module = device.createShaderModule({ code: shared + s.shader + marching })
+  const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
+  if (wrong) throw new Error(`The model's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
+  const pipeline = await device.createRenderPipelineAsync({
+    layout, vertex: { module, entryPoint: 'whole' }, fragment: { module, entryPoint: 'marched', targets: [{ format }] },
+    depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
+  })
+  const across = s.gates.width, rows = Math.max(1, Math.floor(table.byteLength / (16 * across)))
+  const texture = device.createTexture({ size: [across, rows], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
+  device.queue.writeTexture({ texture }, table, { bytesPerRow: 16 * across }, [across, rows])
+  return { pipeline, texture, bind: device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer: uniforms } }, { binding: 1, resource: texture.createView() }] }) }
+}
+
+// The last feature made inside a feature: its own id, or its deepest descendant's.
+function last(inside) {
+  let hi = inside
+  for (let grew = true; grew;) {
+    grew = false
+    for (const f of scene.features) if (f.parent >= inside && f.parent <= hi && f.id > hi) { hi = f.id; grew = true }
+  }
+  return hi
+}
+
+// The picture is drawn when something changed, not every frame.
+let waiting = false
+function redraw() { if (!waiting) { waiting = true; requestAnimationFrame(draw) } }
+
+function draw() {
+  waiting = false
+  if (!device || !depth) return
+  const w = canvas.width, h = canvas.height
+  const back = getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g).slice(0, 3).map(v => v / 255)
+  const timing = timer && !timer.reading && scene && model
+  const encoder = device.createCommandEncoder()
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{ view: context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [...back, 1] }],
+    depthStencilAttachment: { view: depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
+    ...(timing ? { timestampWrites: { querySet: timer.queries, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {}),
+  })
+  if (scene && model) {
+    const p = placed(), f = new Float32Array(68), n = new Int32Array(f.buffer)
+    f.set(p.eye, 0); f.set(p.forward, 4); f.set(p.right, 8); f.set(p.up, 12)
+    f.set(scene.lo, 16); f.set(scene.hi, 20); f.set(back, 24); f.set([...scene.gates.lo, scene.gates.cell], 28)
+    f.set([w, h, tanHalf, scene.step], 32); f.set([p.diagonal * 2e-4, p.near, p.far], 36)
+    n.set(scene.gates.cells, 40); n.set([feature, last(feature), face], 44)
+    f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, devicePixelRatio], 64)
+    device.queue.writeBuffer(uniforms, 0, f)
+    pass.setBindGroup(0, model.bind)
+    pass.setPipeline(model.pipeline)
+    pass.draw(3)
+    for (const hidden of [0, 1]) for (const kind of [lines, dots]) if (kind.count) {
+      pass.setPipeline(kind.pipelines[hidden])
+      pass.setVertexBuffer(0, kind.buffer)
+      pass.draw(6, kind.count)
+    }
+  }
+  pass.end()
+  if (timing) {
+    encoder.resolveQuerySet(timer.queries, 0, 2, timer.resolved, 0)
+    encoder.copyBufferToBuffer(timer.resolved, 0, timer.read, 0, 16)
+  }
+  device.queue.submit([encoder.finish()])
+  if (timing) {
+    timer.reading = true
+    timer.read.mapAsync(GPUMapMode.READ).then(() => {
+      const t = new BigUint64Array(timer.read.getMappedRange())
+      took = Number(t[1] - t[0]) / 1e6
+      timer.read.unmap()
+      timer.reading = false
+      status()
+    })
+  }
+}
+
+// The lines and dots over the model: the extracted edges and corners (of the whole model
+// only), the sketches, the frames.
+function lay() {
+  const segments = [], points = []
+  const line = (a, b, colour, half) => segments.push(...a, ...b, ...colour, half)
+  const run = (points, colour, half) => { for (let i = 1; i < points.length; i++) line(points[i - 1], points[i], colour, half) }
+  const ink = [0.08, 0.09, 0.11, 1], soft = [0.42, 0.45, 0.52, 0.8], flag = [0.75, 0.22, 0.17, 1]
+  if (scene && show.edges && solo == 0 && edges) {
+    for (const edge of edges.edges) {
+      const sharp = (edge.angle ?? edges.sharp_from) >= edges.sharp_from
+      for (const piece of edge.pieces) run(Array.from({ length: piece.length / 3 }, (_, i) => piece.slice(3 * i, 3 * i + 3)), sharp ? ink : soft, sharp ? 0.75 : 0.5)
+    }
+    for (const corner of edges.vertices) points.push(...corner.at, ...ink, 6)
+    for (const f of edges.flags) points.push(...f.at, ...flag, 10)
+  }
+  if (scene && show.sketches) for (const sketch of scene.sketches) for (const loop of sketch.loops) for (const span of loop) run(span.points, [0.55, 0.3, 0.75, 1], 0.8)
+  if (scene && show.frames) {
+    const long = 0.09 * length(sub(scene.hi, scene.lo))
+    const frames = [[0, { o: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }], ...scene.features.filter(f => f.frame).map(f => [f.id, f.frame])]
+    for (const [id, frame] of frames) {
+      const half = id == 0 ? 0.5 : id == feature ? 1.8 : 1.1
+      for (const [axis, colour] of [[frame.x, [0.85, 0.25, 0.2, 1]], [frame.y, [0.2, 0.62, 0.3, 1]], [frame.z, [0.2, 0.4, 0.9, 1]]]) line(frame.o, add(frame.o, times(axis, long)), colour, half)
+    }
+  }
+  for (const [kind, floats] of [[lines, segments], [dots, points]]) {
+    kind.buffer?.destroy()
+    kind.count = floats.length / kind.floats
+    kind.buffer = kind.count ? device.createBuffer({ size: 4 * floats.length, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }) : null
+    if (kind.count) device.queue.writeBuffer(kind.buffer, 0, new Float32Array(floats))
+  }
+  redraw()
+}
+
+// ---- The server, and through it the kernel ----
+
+const about = (name, more = '') => `?name=${encodeURIComponent(name)}${more}`
+
+// A command run for the person: what it says when it fails is shown.
+async function command(what, name) {
+  asking++; status()
+  try {
+    const r = await fetch('/' + what + about(name), { method: 'POST' }), answer = r.ok ? await r.json() : { ok: false, said: await r.text() }
+    if (!answer.ok) said = answer.said
+  } catch { said = unanswered }
+  asking--; status()
+}
+const unanswered = 'The page is no longer served: mk52 open, in the design folder, serves it again.'
+
+// One look at the design folder, and whatever follows from what changed in it.
+let seen = '', folder = { open: [] }
+async function look() {
+  try {
+    const text = await (await fetch('/look')).text()
+    if (said == unanswered) said = ''
+    if (text != seen) {
+      seen = text
+      folder = JSON.parse(text)
+      document.title = folder.folder + ' — mk52'
+      projects = folder.projects; opened = folder.open.map(o => o.name); building = folder.building
+      if (!building) said = folder.said
+      if (folder.fronted != fronted) { fronted = folder.fronted; if (opened.includes(folder.front)) front(folder.front) }
+      if (!opened.includes(current)) front(opened[0] ?? null)
+      follow()
+      panel()
+    }
+  } catch { if (said != unanswered) { said = unanswered; status() } }
+  setTimeout(look, 400)
+}
+
+// The model in front is taken up again whenever the command has written it anew.
+function follow() {
+  const now = folder.open.find(o => o.name == current)?.written ?? null
+  if (now != written) { written = now; if (current) take(current, solo) }
+}
+
+// A model in front: nothing picked out in it yet, and its whole shown.
+function front(name) {
+  if (name == current) return
+  current = name; written = null; edges = null
+  feature = 0; face = -1; solo = 0; picked = null
+  if (!name) { scene = null; model = null; lay() }
+  follow()
+  panel()
+}
+
+// The model as the command last wrote it, asked of the kernel and made ready to draw.
+async function take(name, alone) {
+  const mine = ++taking
+  try {
+    const r = await fetch('/scene' + about(name, '&solo=' + alone))
+    if (!r.ok) throw new Error((await r.text()) || name + ' could not be read.')
+    const s = await r.json()
+    const [table, found] = await Promise.all([fetch('/gates' + about(name, '&solo=' + alone)).then(r => r.arrayBuffer()), fetch('/edges' + about(name)).then(r => r.json())])
+    const ready = await compiled(s, table)
+    // a later one was asked for meanwhile, or the person moved on
+    if (mine != taking || current != name || solo != alone) { ready.texture.destroy(); return }
+    model?.texture.destroy()
+    model = ready; scene = s; edges = found
+    // what was picked out may be gone from the model as it is now
+    if (!s.features.some(f => f.id == feature)) feature = 0
+    face = -1
+    if (!fitted.has(name)) { fitted.add(name); fit() }
+    lay(); panel(); changed()
+  } catch (e) { if (mine == taking && current == name) { said = e.message; status() } }
+}
+
+// A feature shown alone, or with 0 the whole model again.
+function alone(f) {
+  if (!current || f == solo) return
+  solo = f
+  take(current, f)
+  panel()
+}
+
+function deselect() { feature = 0; face = -1; picked = null; lay(); panel(); changed() }
+
+// A click at a point of the picture: what is there.
+async function pick(x, y) {
+  if (!scene) return
+  const name = current, p = placed()
+  try {
+    const hit = await (await fetch('/pick' + about(name, `&solo=${solo}&ray=${[...p.eye, ...ray(p, x, y)].join(',')}`))).json()
+    if (current != name) return
+    picked = hit.hit ? hit : null
+    face = picked?.face_id ?? -1
+    panel(); changed()
+  } catch { /* no answer: nothing is picked */ }
+}
+
+// ---- For an agent: what the person is looking at ----
+// The picture drawn again, and what is picked out written down for viewer_state
+// (_mk52/state/<model>.json), a moment after the last change.
+
+let noting = 0
+function changed() {
+  redraw()
+  clearTimeout(noting)
+  noting = setTimeout(() => {
+    if (!current || !scene) return
+    const chosen = scene.features.find(f => f.id == feature)
+    const state = {
+      model: current,
+      camera: { yaw_degrees: camera.yaw * 180 / Math.PI, pitch_degrees: camera.pitch * 180 / Math.PI, distance: camera.distance, target: camera.target },
+      feature: chosen ? { name: chosen.path, file: chosen.file, line: chosen.line } : null,
+      alone: scene.features.find(f => f.id == solo)?.path ?? null,
+    }
+    if (picked) state.picked = { at: picked.at, face: picked.face, feature: picked.feature?.path ?? '', file: picked.feature?.file ?? '', line: picked.feature?.line ?? 0 }
+    fetch('/state' + about(current), { method: 'POST', body: JSON.stringify(state) }).catch(() => {})
+  }, 300)
+}
+
+// ---- Beside the picture ----
+
+// Where a feature is written, as a link that opens the editor there.
+const source = f => el('a', { href: `vscode://file${encodeURI(scene.root + '/' + f.file)}:${f.line}`, title: `Open ${f.file}:${f.line} in the editor`, onclick: e => e.stopPropagation() }, `${f.file.split('/').pop()}:${f.line}`)
+// A row that is clicked, or reached by keyboard and entered.
+const row = (cls, onclick, ...kids) => el('div', { className: 'row ' + cls, tabIndex: 0, role: 'button', onclick, onkeydown: e => { if (e.key == 'Enter' && e.target == e.currentTarget) onclick(e) } }, kids)
+const action = (label, title, on, onclick) => el('button', { className: 'text' + (on ? ' on' : ''), title, onclick: e => { e.stopPropagation(); onclick() } }, label)
+
+function panel() {
+  $('open').querySelector('.sum').textContent = opened.length || ''
+  $('open').querySelector('.body').replaceChildren(...(opened.length
+    ? opened.map(name => row(name == current ? 'front' : '', () => front(name), el('span', { className: 'name', title: name }, name), el('span', { className: 'acts' }, action('Close', 'Close ' + name, false, () => command('close', name)))))
+    : [el('p', { className: 'empty' }, 'Nothing is open. Choose a function below.')]))
+
+  $('functions').querySelector('.body').replaceChildren(...(projects.length
+    ? projects.flatMap(({ project, functions }) => [
+        row(shut.has(project) ? '' : 'open', () => { shut.has(project) ? shut.delete(project) : shut.add(project); panel() }, el('i', { className: 'chev' }), el('span', { className: 'name' }, project), el('span', { className: 'meta' }, functions.length)),
+        ...(shut.has(project) ? [] : functions.map(f => {
+          const name = project + '.' + f
+          return row(opened.includes(name) ? 'front' : '', () => opened.includes(name) ? front(name) : command('view', name), el('span', { className: 'name', style: 'padding-left: 15px', title: name }, f))
+        }))])
+    : [el('p', { className: 'empty' }, 'No project here yet: mk52 new <project> <file> makes one.')]))
+
+  // each feature followed by the ones made inside it, in the order the code made them;
+  // clicking one picks it out (the rest of the model greys), and under it then, its faces
+  const rows = []
+  if (scene) {
+    const ids = new Set(scene.features.map(f => f.id))
+    const under = (parent, deep) => scene.features.filter(f => parent == null ? !ids.has(f.parent) : f.parent == parent).forEach(f => {
+      const on = feature == f.id
+      rows.push(row(on ? 'on' : '', () => { face = -1; feature = on ? 0 : f.id; lay(); panel(); changed() },
+        el('span', { className: 'name', style: `padding-left: ${12 * deep}px`, title: f.path }, f.name), el('span', { className: 'meta', title: 'Faces it made' }, f.faces.length),
+        el('span', { className: 'acts' }, action('Alone', solo == f.id ? 'Show the whole model again' : 'Show this feature alone', solo == f.id, () => alone(solo == f.id ? 0 : f.id)), source(f))))
+      if (on) for (const made of f.faces) rows.push(row('face' + (face == made.id ? ' on' : ''), () => { face = face == made.id ? -1 : made.id; panel(); changed() }, el('span', { className: 'name', style: `padding-left: ${12 * deep + 16}px` }, made.name)))
+      under(f.id, deep + 1)
+    })
+    rows.push(row(feature == 0 && solo == 0 ? 'front' : '', () => { deselect(); alone(0) }, el('span', { className: 'name' }, 'Whole model')))
+    under(null, 0)
+  }
+  $('features').querySelector('.sum').textContent = scene?.name ?? ''
+  $('features').querySelector('.body').replaceChildren(...(rows.length ? rows : [el('p', { className: 'empty' }, current ? 'Its shader is being made ready.' : 'Of the model in front.')]))
+
+  $('clicked').hidden = !picked
+  if (picked) $('clicked').replaceChildren(el('b', {}, picked.face), el('span', {}, 'at ' + picked.at.map(v => v.toFixed(2)).join(', ')), picked.feature && source(picked.feature))
+  $('extract').disabled = !current
+  $('fit').disabled = !scene
+  $('notice').hidden = !!scene
+  if (!scene) $('notice').textContent = current ? '' : 'Open a function from the list to see it here.'
+  status()
+}
+
+function status() {
+  $('extract').disabled = !current || asking > 0
+  $('status').replaceChildren(...[
+    (building || asking > 0) && el('div', {}, 'Building…'),
+    said && el('pre', { id: 'said' }, said),
+    !said && scene && el('div', {}, `${scene.nodes} nodes, ${scene.selects} selects` + (took == null ? '' : ` · ${took < 10 ? took.toFixed(1) : Math.round(took)} ms a picture`)),
+  ].filter(Boolean))
+}
+
+for (const section of document.querySelectorAll('.panel')) section.querySelector('.head').onclick = e => e.currentTarget.setAttribute('aria-expanded', section.classList.toggle('open'))
+for (const what of ['edges', 'sketches', 'frames']) {
+  const button = $('show' + what[0].toUpperCase() + what.slice(1))
+  button.onclick = () => { show[what] = !show[what]; button.setAttribute('aria-pressed', show[what]); lay() }
+}
+$('extract').onclick = () => current && command('extract', current)
+$('fit').onclick = fit
+
+// ---- The hand on the picture ----
+// Dragging turns the view about its turning point, shift-drag or right-drag slides it,
+// the wheel moves the eye towards what is under the pointer, and a click asks the kernel
+// what is there. F fits the model; Escape clears what is picked out.
+
+let moved = false
+canvas.onpointerdown = e => { moved = false; canvas.setPointerCapture(e.pointerId); canvas.focus() }
+canvas.onpointermove = e => {
+  if (!e.buttons || !scene || (!e.movementX && !e.movementY)) return
+  moved = true
+  if (e.shiftKey || e.buttons & 2) {
+    const p = placed(), k = 2 * tanHalf * camera.distance * p.diagonal / canvas.clientHeight
+    camera.target = sub(p.centre, times(sub(times(p.right, e.movementX), times(p.up, e.movementY)), k))
+  } else {
+    camera.yaw -= e.movementX * 0.008
+    camera.pitch = Math.max(-1.55, Math.min(1.55, camera.pitch + e.movementY * 0.008))
+  }
+  changed()
+}
+canvas.onpointerup = e => { if (!moved && e.button == 0) pick(e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio) }
+canvas.oncontextmenu = e => e.preventDefault()
+// The eye moves towards the point under the pointer at the turning point's depth, and
+// the turning point with it: zooming in arrives where the pointer is.
+canvas.addEventListener('wheel', e => {
+  e.preventDefault()
+  if (!scene || !e.deltaY) return
+  const p = placed(), d = ray(p, e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio)
+  const anchor = add(p.eye, times(d, camera.distance * p.diagonal / dot(d, p.forward)))
+  const step = Math.max(-0.5, Math.min(0.5, -e.deltaY * (e.deltaMode ? 0.04 : 0.004)))
+  const distance = Math.max(0.01, Math.min(8, camera.distance * Math.exp(-step)))
+  camera.target = add(anchor, times(sub(p.centre, anchor), distance / camera.distance))
+  camera.distance = distance
+  changed()
+}, { passive: false })
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  if (e.key == 'f' && scene) fit()
+  if (e.key == 'Escape') deselect()
+})
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redraw)
+
+// ---- Start ----
+
+panel()
+try { await graphics(); look() } catch (e) { $('notice').hidden = false; $('notice').textContent = e.message }
+</script>
+</html>
