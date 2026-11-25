@@ -29,6 +29,13 @@
                                      looks straight down) distance=1.5 (domain diagonals
                                      from the target) target=x,y,z edges mesh
                                      size=800x600 out=file.png
+     mk52 section <model> z=-4.5     a cut through it, as a picture: what is solid in the
+                                     plane where that coordinate (x=, y= or z=) is that
+                                     number, each part in a colour of its own, with a
+                                     scale. The two other coordinates may be given
+                                     from:to, as x=60:78, to look closer. Also: paint (the
+                                     model's own colours), width=1000, out=file.png, and
+                                     text (the cut as letters, with columns=100)
      mk52 new <project> <file>       a new file with one function, a block to start from
      mk52 brief <model>              what an agent working on that function is told
      mk52 mcp                        the kernel and the page as tools for an agent
@@ -57,7 +64,7 @@
    kernel, as it is now. *)
 open Mk52
 
-let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | new <project> <file> | brief <model> | mcp | install"
+let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | section <model> x=|y=|z=<number> [the others from:to] [paint] [text] [width=] [columns=] [out=] | new <project> <file> | brief <model> | mcp | install"
 let home = Place.home ()
 
 (* The design folder: here or above, the folder with a dune-project and the link to the tool. *)
@@ -207,6 +214,23 @@ let () =
         Out_channel.with_open_bin out (fun oc -> output_string oc dxf);
         print_endline text;
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
+    | "section" :: name :: options ->
+        let opt k = List.find_map (fun o -> match String.index_opt o '=' with Some i when String.sub o 0 i = k -> Some (String.sub o (i + 1) (String.length o - i - 1)) | _ -> None) options in
+        let number k v = match float_of_string_opt v with Some x -> x | None -> failwith (k ^ " is a number, or from:to") in
+        (* a coordinate given one number is where the cut is; given from:to, how much of the cut to show *)
+        let given = Array.map (fun k -> Option.map (fun v -> (k, List.map (number k) (String.split_on_char ':' v))) (opt k)) Project.coordinate in
+        let axis, at = match List.filter_map (fun (i, g) -> match g with Some (_, [ v ]) -> Some (i, v) | _ -> None) (List.mapi (fun i g -> (i, g)) (Array.to_list given)) with [ one ] -> one | _ -> failwith "say where the cut is with one of x=, y=, z= and a number, as z=-4.5; the other two may be given from:to, as x=60:78" in
+        let spans = Array.map (function Some (_, [ a; b ]) -> Some (a, b) | Some (k, l) when List.length l > 2 -> failwith (k ^ " is a number, or from:to") | _ -> None) given in
+        let m = Project.model name in
+        let cut = { Project.axis; at; spans } in
+        if List.mem "text" options then print_string (Project.section_text ?cols:(Option.map (fun v -> int_of_float (number "columns" v)) (opt "columns")) m cut)
+        else begin
+          let text, png = Project.section ?w:(Option.map (fun v -> int_of_float (number "width" v)) (opt "width")) ~paint:(List.mem "paint" options) m cut in
+          let out = match opt "out" with Some o -> o | None -> Place.section m.name in
+          Out_channel.with_open_bin out (fun oc -> output_string oc png);
+          print_endline text;
+          print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
+        end
     | "picture" :: name :: options ->
         let opt k = List.find_map (fun o -> match String.index_opt o '=' with Some i when String.sub o 0 i = k -> Some (String.sub o (i + 1) (String.length o - i - 1)) | _ -> None) options in
         let num k d = match opt k with Some v -> ( match float_of_string_opt v with Some x -> x | None -> failwith (k ^ " is a number")) | None -> d in

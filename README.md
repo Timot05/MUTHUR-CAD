@@ -29,6 +29,7 @@ Edit `lamp/base.ml` in your editor; every time a file is saved the project is bu
 | `mk52 picture <model> [...]` | a picture made by the kernel, with no page and no graphics card: a PNG whose path is printed. `yaw=` `pitch=` `distance=` `target=x,y,z` `edges` `mesh` `size=800x600` `out=` |
 | `mk52 extract <model> [32\|64\|128]` | its edges and corners, printed with every flag, and drawn in the page if the model is open |
 | `mk52 outline <model> [out=file.dxf]` | the outline of a flat part, a board's: the edges round its top, holes too, as the lines, arcs and circles they are, in a DXF file in mm |
+| `mk52 section <model> z=<n>` | a cut through it where that coordinate (`x=`, `y=` or `z=`) is that number: what is solid, each part in a colour of its own, with a scale; the other two `from:to` to look closer; `text` for the cut as letters |
 | `mk52 mesh <model> [cells] [raw]` | its surface as even triangles attached to its creases and corners: an STL file, what the mesh is like, and a picture |
 | `mk52 brief <model>` | what an agent working on that function is told |
 | `mk52 mcp` | the kernel and the page as tools for an agent |
@@ -184,15 +185,15 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `lib/step.ml`, `mesh.ml` | 804 | a STEP file read (planes, cylinders, cones, spheres, tori, NURBS; assemblies), and its faces cut into triangles: mk49's, as they were |
 | `lib/asset.ml` | 117 | something made elsewhere shown with a model: where a model's code puts it, and its triangles from a STEP or an STL file |
 | `lib/region.ml` | 147 | the model cut into regions, and each region's own short program (the field alone) as a WGSL function |
-| `lib/render.ml`, `png.ml` | 207 | a picture made by the kernel, as a PNG |
+| `lib/render.ml`, `png.ml` | 301 | a picture made by the kernel, and a cut through a model with its parts in colours and a scale, as a PNG |
 | `lib/emit.ml`, `place.ml`, `json.ml` | 215 | a model as a file; where things are kept; JSON |
 | `cli/main.ml` | 228 | the `mk52` command |
 | `cli/project.ml` | 316 | models by name, built: a project compiled once and any of its functions built from it |
 | `cli/scene.ml` | 128 | what the page asks: how a model is drawn, its regions, what a ray hits |
 | `cli/serve.ml` | 209 | the page's server: the folder's files, the command run, the code watched |
-| `cli/mcp.ml` | 145 | tools for an agent: `picture`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
+| `cli/mcp.ml` | 145 | tools for an agent: `picture`, `section`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
 | `web/view.html` | 1174 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
-| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 220 checks (`dune test`, 15 s), and mk49's experiments |
+| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 225 checks (`dune test`, 15 s), and mk49's experiments |
 
 ## Not there
 

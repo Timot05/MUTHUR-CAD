@@ -13,6 +13,10 @@
 type built = { graph : Graph.t; features : Graph.feature list; sketches : Sketch.drawn list; assets : Asset.placed list }
 
 (* What has been built in this program so far, around its graph. *)
+(* A feature's colour: its own, or that of the nearest feature around it that has one. *)
+let rec coloured (features : Graph.feature list) (f : Graph.feature) =
+  match f.colour with Some c -> Some c | None -> Option.bind (List.find_opt (fun (x : Graph.feature) -> x.fid = f.parent) features) (coloured features)
+
 let built graph = { graph; features = !Graph.features; sketches = List.rev !Sketch.drawn; assets = List.rev !Asset.shown }
 
 type t = { name : string; lo : float array; hi : float array; built : built }

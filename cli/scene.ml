@@ -112,11 +112,7 @@ let features_of (m : Emit.t) =
 
 let colour = function Some (r, g, b) -> Json.Arr [ num r; num g; num b ] | None -> Json.Null
 
-(* A feature's colour: its own, or that of the nearest feature around it that has one. *)
-let rec coloured (m : Emit.t) (f : Graph.feature) =
-  match f.colour with
-  | Some c -> Some c
-  | None -> Option.bind (List.find_opt (fun (x : Graph.feature) -> x.fid = f.parent) m.built.features) (coloured m)
+let coloured (m : Emit.t) = Emit.coloured m.built.features
 
 (* A feature: where it is defined, the frame it sits in if it has one (its origin and
    three axes, in the world), its colour if it has one, and the faces it made with the

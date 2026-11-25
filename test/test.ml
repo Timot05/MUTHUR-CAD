@@ -374,6 +374,26 @@ let outlines () =
   let has part = let n = String.length part in let rec at i = i + n <= String.length text && (String.sub text i n = part || at (i + 1)) in at 0 in
   check "outlines: the file has its entities, in millimetres, and ends" (has "$INSUNITS\n70\n4\n" && has "0\nLINE\n" && has "0\nCIRCLE\n" && has "40\n2.000000\n" && has "0\nEOF\n") text
 
+(* A cut through a model (Render.cut_cells, Render.section): a ball of radius 2 inside a
+   box cut through its middle is a disc of that radius, and beside its middle a smaller
+   one; what is outside the model's box is air; and the picture has the cut's own shape. *)
+let cuts () =
+  let ball = Graph.feature ("test", 0, 0, 0) "ball" (fun () -> Solid.sphere "ball" (0., 0., 0.) 2.) in
+  let lo = [| -3.; -3.; -3. |] and hi = [| 3.; 3.; 3. |] in
+  let cut at : Render.cut = { axis = 2; at; left = -4.; right = 4.; bottom = -4.; top = 4. } in
+  let n = 200 in
+  let solid at = Array.fold_left (fun k id -> if id >= 0 then k + 1 else k) 0 (Render.cut_cells ~cols:n ~rows:n (cut at) ~part:(fun f -> f) ~lo ~hi ball) in
+  let area at = float_of_int (solid at) *. (8. /. float_of_int n) ** 2. in
+  check "cuts: a ball cut through its middle is a disc of its radius" (Float.abs (area 0. -. (Float.pi *. 4.)) < 0.1) (Printf.sprintf "%.3f, not %.3f" (area 0.) (Float.pi *. 4.));
+  check "cuts: beside its middle, a smaller one" (Float.abs (area 1.2 -. (Float.pi *. (4. -. 1.44))) < 0.1) (Printf.sprintf "%.3f" (area 1.2));
+  check "cuts: past it, nothing" (solid 2.5 = 0 && solid 5. = 0) (Printf.sprintf "%d and %d cells" (solid 2.5) (solid 5.));
+  let im, parts = Render.section ~w:200 { (cut 0.) with bottom = -2.; top = 2. } ~part:(fun f -> f) ~colour:(fun _ -> (0.2, 0.5, 0.8)) ~lo ~hi ball in
+  check "cuts: the picture is as wide and as high as the cut, with room for its scale"
+    (im.w > 200 && im.w < 300 && im.h > 100 && im.h < 140) (Printf.sprintf "%d by %d" im.w im.h);
+  check "cuts: its one part is said, with where it is"
+    (match parts with [ (_, (u0, u1), (v0, v1)) ] -> Float.abs (u0 +. 2.) < 0.05 && Float.abs (u1 -. 2.) < 0.05 && Float.abs (v0 +. 2.) < 0.05 && Float.abs (v1 -. 2.) < 0.05 | _ -> false)
+    (String.concat "; " (List.map (fun (id, (u0, u1), (v0, v1)) -> Printf.sprintf "%d: %.2f..%.2f, %.2f..%.2f" id u0 u1 v0 v1) parts))
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -388,4 +408,5 @@ let () =
   chamfers ();
   assets ();
   outlines ();
+  cuts ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

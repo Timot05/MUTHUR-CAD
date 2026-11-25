@@ -122,4 +122,98 @@ let lines ?(ink = (0.11, 0.11, 0.13)) ?(seen = 0.9) ?(hidden = 0.22) ~camera ~lo
       go pts)
     curves
 
+(* ---- A cut ---- *)
+
+(* A cut through a model: the plane where the coordinate [axis] is [at], and the part of
+   it to show, from left to right and from bottom to top. It is seen so that the two
+   other coordinates run to the right and up, the earlier of them to the right: a cut at
+   a z is seen from the front (+z), x to the right and y up; at a y, from -y, x to the
+   right and z up; at an x, from +x, y to the right and z up. *)
+type cut = { axis : int; at : float; left : float; right : float; bottom : float; top : float }
+
+let across_up axis = match axis with 0 -> (1, 2) | 1 -> (0, 2) | _ -> (0, 1)
+
+(* What is in the cut, on a grid of cells over it: for each cell, row by row from the
+   top, what [part] says of the feature that answers at its middle where that is solid,
+   and -1 where it is air or outside the model's box. *)
+let cut_cells ~cols ~rows (k : cut) ~part ~lo ~hi (g : Graph.t) =
+  let p = Prog.compile g in
+  let c = Prog.ctx p in
+  let tree = Octree.build p c ~lo ~hi ~depth:6 in
+  let a, b = across_up k.axis in
+  let x = Array.make 3 k.at in
+  Array.init (cols * rows) (fun i ->
+    x.(a) <- k.left +. ((float_of_int (i mod cols) +. 0.5) /. float_of_int cols *. (k.right -. k.left));
+    x.(b) <- k.top -. ((float_of_int (i / cols) +. 0.5) /. float_of_int rows *. (k.top -. k.bottom));
+    if x.(0) < lo.(0) || x.(0) > hi.(0) || x.(1) < lo.(1) || x.(1) > hi.(1) || x.(2) < lo.(2) || x.(2) > hi.(2) then -1
+    else
+      let s = Prog.eval p c (Octree.state tree x) x in
+      if s.d.v < 0. then part s.feature else -1)
+
+(* Figures for the scale: three dots by five, a row a number of three bits. *)
+let figure = function
+  | '0' -> [| 7; 5; 5; 5; 7 |] | '1' -> [| 2; 6; 2; 2; 7 |] | '2' -> [| 7; 1; 7; 4; 7 |] | '3' -> [| 7; 1; 7; 1; 7 |] | '4' -> [| 5; 5; 7; 1; 1 |]
+  | '5' -> [| 7; 4; 7; 1; 7 |] | '6' -> [| 7; 4; 7; 5; 7 |] | '7' -> [| 7; 1; 1; 1; 1 |] | '8' -> [| 7; 5; 7; 5; 7 |] | '9' -> [| 7; 5; 7; 1; 7 |]
+  | '-' -> [| 0; 0; 7; 0; 0 |] | '.' -> [| 0; 0; 0; 0; 2 |] | _ -> [| 0; 0; 0; 0; 0 |]
+
+let ink = (0.11, 0.11, 0.13)
+let figure_w = 8  (* a figure and the space after it, in pixels: a dot is two *)
+
+(* Text in figures, its upper left corner at (x, y). *)
+let written (im : t) x y text =
+  String.iteri
+    (fun i ch ->
+      Array.iteri
+        (fun r bits ->
+          for d = 0 to 2 do
+            if bits land (4 lsr d) <> 0 then
+              for dy = 0 to 1 do for dx = 0 to 1 do
+                let px = x + (figure_w * i) + (2 * d) + dx and py = y + (2 * r) + dy in
+                if px >= 0 && px < im.w && py >= 0 && py < im.h then put im px py ink
+              done done
+          done)
+        (figure ch))
+    text
+
+(* A step for a scale's marks: 1, 2 or 5 times a power of ten, about [marks] of them in a span. *)
+let scale_step span marks =
+  let raw = span /. float_of_int marks in
+  let ten = 10. ** Float.floor (Float.log10 raw) in
+  let m = raw /. ten in
+  ten *. if m < 1.5 then 1. else if m < 3.5 then 2. else if m < 7.5 then 5. else 10.
+
+(* The cut as a picture, [w] pixels across the part shown (and as many down as keeps a
+   square a square). Each part is filled with its [colour]; a dark line goes round what
+   is solid and between two parts that touch; air is left pale, with a faint line at
+   every mark of the scale, which is written along the left and under the cut. With the
+   picture: each part in it, the largest first, and where in the cut it is (from left
+   to right, and from bottom to top). *)
+let section ?(w = 1000) (k : cut) ~part ~colour ~lo ~hi (g : Graph.t) =
+  let h = max 1 (int_of_float (Float.round (float_of_int w *. (k.top -. k.bottom) /. (k.right -. k.left)))) in
+  let cells = cut_cells ~cols:w ~rows:h k ~part ~lo ~hi g in
+  let left = 52 and under = 20 and over = 8 and beside = 28 in
+  let im = blank ~w:(left + w + beside) ~h:(over + h + under) in
+  let paper = (0.975, 0.975, 0.98) and faint = (0.86, 0.87, 0.9) in
+  let step = scale_step (k.right -. k.left) 8 in
+  let marks from to_ = let first = Float.ceil (from /. step) in List.init (max 0 (int_of_float (Float.floor (to_ /. step) -. first) + 1)) (fun i -> (first +. float_of_int i) *. step) in
+  let col u = int_of_float ((u -. k.left) /. (k.right -. k.left) *. float_of_int w) and row v = int_of_float ((k.top -. v) /. (k.top -. k.bottom) *. float_of_int h) in
+  let lines_x = List.map col (marks k.left k.right) and lines_y = List.map row (marks k.bottom k.top) in
+  (* of each part: its pixels, and the columns and rows they are in *)
+  let found = Hashtbl.create 16 in
+  for py = 0 to h - 1 do
+    for px = 0 to w - 1 do
+      let id = cells.((w * py) + px) in
+      if id >= 0 then
+        Hashtbl.replace found id (match Hashtbl.find_opt found id with Some (n, x0, x1, y0, y1) -> (n + 1, min x0 px, max x1 px, min y0 py, max y1 py) | None -> (1, px, px, py, py));
+      let other dx dy = px + dx < w && py + dy < h && cells.((w * (py + dy)) + px + dx) <> id in
+      put im (left + px) (over + py) (if other 1 0 || other 0 1 then ink else if id >= 0 then colour id else if List.mem px lines_x || List.mem py lines_y then faint else paper)
+    done
+  done;
+  let label v = let s = Printf.sprintf "%.6g" (if Float.abs v < 1e-9 then 0. else v) in if String.length s > 6 then Printf.sprintf "%.4g" v else s in
+  List.iter (fun v -> let s = label v in written im (left + col v - (figure_w * String.length s / 2)) (over + h + 6) s) (marks k.left k.right);
+  List.iter (fun v -> let s = label v in written im (left - 6 - (figure_w * String.length s)) (over + row v - 5) s) (marks k.bottom k.top);
+  let across px = k.left +. (float_of_int px /. float_of_int w *. (k.right -. k.left)) and up py = k.top -. (float_of_int py /. float_of_int h *. (k.top -. k.bottom)) in
+  let parts = List.sort (fun (_, (a, _, _, _, _)) (_, (b, _, _, _, _)) -> compare b a) (Hashtbl.fold (fun id at acc -> (id, at) :: acc) found []) in
+  (im, List.map (fun (id, (_, x0, x1, y0, y1)) -> (id, (across x0, across (x1 + 1)), (up (y1 + 1), up y0))) parts)
+
 let png (im : t) = Png.encode ~w:im.w ~h:im.h im.rgb

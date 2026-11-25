@@ -52,6 +52,7 @@ let gates name feature = under "open" (Printf.sprintf "%s.%d.gates" name feature
 let asset id = under "assets" (id ^ ".mesh")
 let state name = under "state" (name ^ ".json")
 let picture name = under "pictures" (name ^ ".png")
+let section name = under "pictures" (name ^ ".section.png")
 let surface name = under "meshes" (name ^ ".stl")
 let outline name = under "outlines" (name ^ ".dxf")
 

@@ -59,6 +59,31 @@ let tools =
         let target = match Json.list (Json.member "target" args) with [ x; y; z ] -> Some [| Json.number x; Json.number y; Json.number z |] | _ -> None in
         let camera = { Render.yaw = num "yaw" 40.; pitch = num "pitch" 26.; dist = num "distance" (Render.fit ~w ~h); target } in
         [ Image (Png.base64 (Project.picture ~w ~h ~camera ~edges:(Json.bool (Json.member "edges" args)) (Project.model (model_of args))), "image/png") ] );
+    ( "section",
+      "A cut through a model, made by the kernel: what is solid in the plane where one coordinate is a number, each part in a colour of its own with a dark line round it, and a scale along two sides. For what is inside or between parts, which a picture from outside does not show: a clearance, how thick a wall is, what touches what, what is under what. Say the plane with axis and at. To look closer, give either or both of the two other coordinates as [from, to]; left out, all that is solid in the plane is shown. A cut at a z is seen from +z, x to the right and y up; at a y, from -y, x to the right and z up; at an x, from +x, y to the right and z up. With the picture comes each part cut, its colour and where in the cut it is. With text, the cut comes as letters instead, a letter a part and a dot for air: for when a column counts more than a look.",
+      schema
+        [ model_prop;
+          ("axis", prop "string" "x, y or z: the coordinate that is the same all over the cut.");
+          ("at", prop "number" "That coordinate's value.");
+          ("x", prop "array" "If the cut is not at an x: how much of x to show, [from, to].");
+          ("y", prop "array" "If the cut is not at a y: how much of y to show, [from, to].");
+          ("z", prop "array" "If the cut is not at a z: how much of z to show, [from, to].");
+          ("paint", prop "boolean" "Fill each part with its own colour in the model, where it has one, instead of colours that tell the parts apart.");
+          ("text", prop "boolean" "The cut as letters, not a picture.");
+          ("width", prop "integer" "The picture's width in pixels. Default 1000.");
+          ("columns", prop "integer" "With text: how many letters across. Default 100.") ]
+        [ "axis"; "at" ],
+      fun args ->
+        let axis = match Json.member "axis" args with Json.Str "x" -> 0 | Json.Str "y" -> 1 | Json.Str "z" -> 2 | _ -> failwith "axis is x, y or z" in
+        let at = match Json.member "at" args with Json.Num v -> v | _ -> failwith "at is a number: where along the axis the cut is" in
+        let span k = match Json.member k args with Json.Arr [ a; b ] -> Some (Json.number a, Json.number b) | Json.Null -> None | _ -> failwith (k ^ " is [from, to]") in
+        let cut = { Project.axis; at; spans = Array.map span Project.coordinate } in
+        let m = Project.model (model_of args) in
+        let whole k = match Json.member k args with Json.Num v -> Some (int_of_float v) | _ -> None in
+        if Json.bool (Json.member "text" args) then [ Text (Project.section_text ?cols:(whole "columns") m cut) ]
+        else
+          let text, png = Project.section ?w:(Option.map (fun w -> min 2000 w) (whole "width")) ~paint:(Json.bool (Json.member "paint" args)) m cut in
+          [ Image (Png.base64 png, "image/png"); Text text ] );
     ( "feature_brief",
       "For an agent about to work on one function of a project: where it is, how to work and what there is to build with. Call this first when you are told to work on one.",
       schema [ ("name", prop "string" "The function, as <project>.<file>.<function> or <project>.<file>.") ] [ "name" ],
@@ -109,9 +134,9 @@ let handle message =
              ("serverInfo", Json.Obj [ ("name", Json.Str "mk52"); ("version", Json.Str "0.1") ]);
              ( "instructions",
                Json.Str
-                 "Tools into the mk52 kernel and its page. To see a model yourself, call picture: the kernel draws it from any side; nothing need be open. The page is the person's: a browser page beside their editor (mk52 open opens it), listing the code's functions and showing each one they have opened. An open model is built again by itself whenever a file is saved, so they see what you do as you do it. viewer_state says what they have selected or picked in a model, for when they say \"this face\" or \"here\".\n\
+                 "Tools into the mk52 kernel and its page. To see a model yourself, call picture: the kernel draws it from any side; nothing need be open. To see into it, call section: a cut through it at an x, a y or a z, the parts in colours with a scale, which shows what a picture from outside cannot (a clearance, a wall, what touches what). The page is the person's: a browser page beside their editor (mk52 open opens it), listing the code's functions and showing each one they have opened. An open model is built again by itself whenever a file is saved, so they see what you do as you do it. viewer_state says what they have selected or picked in a model, for when they say \"this face\" or \"here\".\n\
                   You are in a design folder: a folder of projects. A project is a folder here, <project>/, holding its code: .ml files, in folders if it likes, all compiled together. A file there is the module of its name, capitalised, to the others (bore.ml is Bore), with no import. Every function that takes () and returns a solid can be built and opened on its own, and is a model: <project>.<file>.<function>, or <project>.<file> for a file's graph. A function that needs arguments is seen where it is called. mk52/ is a link to the tool: its kernel is mk52/lib/, and it is not yours to change.\n\
-                  The command: mk52 models lists the projects and their functions; mk52 picture <model> [yaw= pitch= distance= target= edges] writes a picture and prints its path; mk52 extract <model> prints its edges and corners; mk52 outline <model> writes a flat part's outline, a board's, as a DXF file of lines, arcs and circles; mk52 view <model> opens it in the person's page; mk52 new <project> <file> makes a file with a block to start from; mk52 brief <model> says how to work on one. If you are told to work on a function, call feature_brief (or run the brief) first.\n\
+                  The command: mk52 models lists the projects and their functions; mk52 picture <model> [yaw= pitch= distance= target= edges] writes a picture and prints its path; mk52 section <model> z=<number> (or x=, y=; the other two from:to to look closer) writes a cut through it, the parts in colours with a scale, for what is inside or between parts; mk52 extract <model> prints its edges and corners; mk52 outline <model> writes a flat part's outline, a board's, as a DXF file of lines, arcs and circles; mk52 view <model> opens it in the person's page; mk52 new <project> <file> makes a file with a block to start from; mk52 brief <model> says how to work on one. If you are told to work on a function, call feature_brief (or run the brief) first.\n\
                   Modelling. A model is built from features, Graph.feature ?frame __POS__ \"name\" (fun () -> ...), which nest, and which may sit in a frame (mk52/lib/frame.ml: translate, rotate, chain). What there is to build with, in mk52/lib/:\n\
                   - Sketch (sketch.ml): a closed outline of lines and arcs drawn with start, line, arc and close, each span a named face, then Sketch.extrude or Sketch.revolve, with holes as loops of their own. Sketch.extrude ~chamfer_lo ~chamfer_hi cuts the edge round an end at 45 degrees, exactly: use it rather than a loft for a chamfered plate or shell. Reach for it first when a feature is a profile pulled straight or turned about an axis; mk52/models/bracket.ml is a worked example. A sketch is drawn in the x and y of the frame it is built in.\n\
                   - Colour: Graph.feature ~colour:\"#rrggbb\" gives a feature a colour, and what is made inside it has it too; the page shows the colours with Faces off.\n\

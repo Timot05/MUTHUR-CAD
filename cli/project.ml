@@ -268,6 +268,113 @@ let picture ?(w = 800) ?(h = 600) ?camera ?(edges = false) ?surface (m : Emit.t)
     surface;
   Render.png im
 
+(* ---- A cut ---- *)
+
+(* What is asked of a cut: the plane where coordinate [axis] is [at], and for the two
+   other coordinates from where to where, or all of the model. *)
+type cut = { axis : int; at : float; spans : (float * float) option array }
+
+let coordinate = [| "x"; "y"; "z" |]
+
+(* The cut to draw: for a coordinate not said, all of what is solid in the plane (found on
+   a coarse grid over the model's box) and a little round it, or the box if nothing is. *)
+let plane (m : Emit.t) (k : cut) : Render.cut =
+  let a, b = Render.across_up k.axis in
+  let whole : Render.cut = { axis = k.axis; at = k.at; left = m.lo.(a); right = m.hi.(a); bottom = m.lo.(b); top = m.hi.(b) } in
+  let said i = match k.spans.(i) with Some (u, v) when u <> v -> Some (Float.min u v, Float.max u v) | _ -> None in
+  let solid =
+    if said a <> None && said b <> None then None
+    else
+      let n = 300 in
+      let cells = Render.cut_cells ~cols:n ~rows:n whole ~part:(fun _ -> 0) ~lo:m.lo ~hi:m.hi m.built.graph in
+      let x0 = ref n and x1 = ref (-1) and y0 = ref n and y1 = ref (-1) in
+      Array.iteri (fun i id -> if id >= 0 then (x0 := min !x0 (i mod n); x1 := max !x1 (i mod n); y0 := min !y0 (i / n); y1 := max !y1 (i / n))) cells;
+      if !x1 < 0 then None
+      else
+        let f v = float_of_int v /. float_of_int n in
+        Some ((whole.left +. (f !x0 *. (whole.right -. whole.left)), whole.left +. (f (!x1 + 1) *. (whole.right -. whole.left))), (whole.top -. (f (!y1 + 1) *. (whole.top -. whole.bottom)), whole.top -. (f !y0 *. (whole.top -. whole.bottom))))
+  in
+  let fitted (lo, hi) other = let pad = 0.04 *. Float.max (hi -. lo) other in (lo -. pad, hi +. pad) in
+  let across, up = match solid with Some (u, v) -> (fitted u (snd v -. fst v), fitted v (snd u -. fst u)) | None -> ((whole.left, whole.right), (whole.bottom, whole.top)) in
+  let (left, right), (bottom, top) = (Option.value ~default:across (said a), Option.value ~default:up (said b)) in
+  { axis = k.axis; at = k.at; left; right; bottom; top }
+
+(* A model's parts are its features that are in no other: the part a feature is in. *)
+let part_of (m : Emit.t) =
+  let by = Hashtbl.create 64 in
+  List.iter (fun (f : Graph.feature) -> Hashtbl.replace by f.fid f) m.built.features;
+  let rec top fid = match Hashtbl.find_opt by fid with Some f when Hashtbl.mem by f.parent -> top f.parent | Some f -> f.fid | None -> 0 in
+  (top, fun id -> match Hashtbl.find_opt by id with Some f -> f.fname | None -> "what is in no feature")
+
+(* A part's colour in a cut: its own in the model if [paint] and it has one, else one
+   by its number, a golden step round the colours from the one before, so that parts
+   whose numbers are near are far apart in colour. *)
+let cut_colour ?(paint = false) (m : Emit.t) id =
+  let own = if paint then Option.bind (List.find_opt (fun (f : Graph.feature) -> f.fid = id) m.built.features) (Emit.coloured m.built.features) else None in
+  match own with
+  | Some c -> c
+  | None ->
+      let hue = Float.rem (float_of_int id *. 0.61803398875) 1. in
+      let tone o = 0.62 +. (0.3 *. cos (6.2831853 *. (hue +. o))) in
+      (tone 0., tone 0.33, tone 0.67)
+
+let colour_name (r, g, b) =
+  let hi = Float.max r (Float.max g b) and lo = Float.min r (Float.min g b) in
+  if hi -. lo < 0.08 then (if hi > 0.8 then "white" else if hi > 0.35 then "grey" else "black")
+  else
+    let h = 60. *. (if hi = r then Float.rem ((g -. b) /. (hi -. lo)) 6. else if hi = g then ((b -. r) /. (hi -. lo)) +. 2. else ((r -. g) /. (hi -. lo)) +. 4.) in
+    let h = if h < 0. then h +. 360. else h in
+    if h < 18. then "red" else if h < 45. then "orange" else if h < 70. then "yellow" else if h < 160. then "green" else if h < 200. then "teal" else if h < 255. then "blue" else if h < 300. then "purple" else if h < 340. then "pink" else "red"
+
+let seen_from = [| "+x"; "-y"; "+z"  |]
+
+let cut_said (m : Emit.t) (k : Render.cut) =
+  let a, b = Render.across_up k.axis in
+  Printf.sprintf "%s cut at %s = %g, seen from %s: %s from %g to %g, left to right; %s from %g to %g, bottom to top" m.name coordinate.(k.axis) k.at seen_from.(k.axis) coordinate.(a) k.left k.right coordinate.(b) k.bottom k.top
+
+(* The cut as a picture (Render.section), and what is in it: each part with its colour. *)
+let section ?(w = 1000) ?paint (m : Emit.t) (k : cut) =
+  let k = plane m k in
+  let w = max 64 (min w (int_of_float (1600. *. (k.right -. k.left) /. (k.top -. k.bottom)))) in
+  let part, name = part_of m in
+  let im, parts = Render.section ~w k ~part ~colour:(cut_colour ?paint m) ~lo:m.lo ~hi:m.hi m.built.graph in
+  let text =
+    Printf.sprintf "%s; a pixel is %.3g.\n%s" (cut_said m k) ((k.right -. k.left) /. float_of_int w)
+      (match parts with
+       | [] -> "Nothing is solid in it."
+       | _ ->
+           let a, b = Render.across_up k.axis in
+           String.concat "\n"
+             (List.map (fun (id, (u0, u1), (v0, v1)) -> Printf.sprintf "  %s: %s, %s %.4g to %.4g, %s %.4g to %.4g" (colour_name (cut_colour ?paint m id)) (name id) coordinate.(a) u0 u1 coordinate.(b) v0 v1) parts))
+  in
+  (text, Render.png im)
+
+(* The cut as text, for where a column counts more than a look: a letter for each part,
+   a dot for air, a cell twice as high as wide, as a letter is. *)
+let section_text ?(cols = 100) (m : Emit.t) (k : cut) =
+  let k = plane m k in
+  let cols = max 8 (min 200 cols) in
+  let cell = (k.right -. k.left) /. float_of_int cols in
+  let rows = max 1 (int_of_float (Float.round ((k.top -. k.bottom) /. (2. *. cell)))) in
+  let part, name = part_of m in
+  let cells = Render.cut_cells ~cols ~rows k ~part ~lo:m.lo ~hi:m.hi m.built.graph in
+  let counts = Hashtbl.create 16 in
+  Array.iter (fun id -> if id >= 0 then Hashtbl.replace counts id (1 + Option.value ~default:0 (Hashtbl.find_opt counts id))) cells;
+  let parts = List.map fst (List.sort (fun (_, a) (_, b) -> compare b a) (Hashtbl.fold (fun id n acc -> (id, n) :: acc) counts [])) in
+  let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" in
+  let letter id = let rec at i = function [] -> '?' | p :: rest -> if p = id then letters.[i mod String.length letters] else at (i + 1) rest in at 0 parts in
+  let b = Buffer.create (rows * (cols + 12)) in
+  let _, up = Render.across_up k.axis in
+  Buffer.add_string b (Printf.sprintf "%s; a letter is %.3g wide and %.3g high. The number before a row is its %s.\n" (cut_said m k) cell (2. *. cell) coordinate.(up));
+  for r = 0 to rows - 1 do
+    Buffer.add_string b (Printf.sprintf "%9.3f " (k.top -. ((float_of_int r +. 0.5) /. float_of_int rows *. (k.top -. k.bottom))));
+    for c = 0 to cols - 1 do Buffer.add_char b (match cells.((cols * r) + c) with -1 -> '.' | id -> letter id) done;
+    Buffer.add_char b '\n'
+  done;
+  List.iter (fun id -> Buffer.add_string b (Printf.sprintf "  %c: %s\n" (letter id) (name id))) parts;
+  if parts = [] then Buffer.add_string b "Nothing is solid in it.\n";
+  Buffer.contents b
+
 (* ---- A mesh ---- *)
 
 (* A model in the box of its mesh, a twentieth more all round, for a picture of the mesh. *)
@@ -312,6 +419,7 @@ let brief name =
           "";
           "HOW TO WORK, from this folder. The person has the page open beside their editor: a model that is open is built again, by itself, each time a file is saved, so they see what you do as you do it.";
           Printf.sprintf "  mk52 picture %s  a picture of it, made by the kernel, as a PNG whose path is printed: look at it. Add yaw= pitch= distance= target=x,y,z to look from elsewhere, edges for its edges" name;
+          Printf.sprintf "  mk52 section %s z=0  a cut through it where z is 0 (or x=, y=), the parts in colours with a scale: for what is inside it or between its parts. The other two coordinates from:to look closer, as x=10:20; text gives it as letters" name;
           Printf.sprintf "  mk52 extract %s  its edges and corners, with every flag: a place where the model may not be what was meant" name;
           Printf.sprintf "  mk52 outline %s  if it is a flat part, a board: its outline, holes too, as a DXF file of lines, arcs and circles" name;
           Printf.sprintf "  mk52 view %s     opens it in the person's page, in front" name;
