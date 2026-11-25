@@ -27,7 +27,9 @@ cp "$(ocamlc -where)"/*.cmi "$out/interfaces/ocaml/"
 cp web/view.html "$out/web/"
 cp lib/*.ml "$out/lib/"
 cp models/bracket.ml "$out/models/"
-cp README.md LICENSE "$out/"
+mkdir -p "$out/docs"
+cp README.md NOTES.md LICENSE "$out/"
+cp docs/*.png "$out/docs/"
 # The builder is bytecode, and OCaml's bytecode runtime is linked to the zstd library
 # where OCaml was built with it. On macOS that library is carried along, and the builder
 # told to look for it beside itself; the change is then signed, as the system asks.
