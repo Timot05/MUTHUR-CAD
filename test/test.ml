@@ -338,6 +338,7 @@ let assets () =
       Sys.remove path;
       check ("assets: an STL file, " ^ name) (right m) (Printf.sprintf "%d points, %d corners" (Array.length m.points / 3) (Array.length m.triangles)))
     [ ("as text", ascii "0 0 1"); ("as text, no normal given", ascii "0 0 0"); ("in binary", binary) ];
+  check "colours: one is read as written, and what is not one is refused" (Colour.of_string "#ff8000" = (1., 128. /. 255., 0.) && (try ignore (Colour.of_string "orange"); false with Failure _ -> true)) "";
   Asset.shown := [];
   ignore (Graph.within (Frame.translate (1., 2., 3.)) (fun () -> Asset.show ~frame:(Frame.translate (10., 0., 0.)) "there.step"; Solid.sphere "s" (0., 0., 0.) 1.));
   check "assets: one shown in a frame is put there" (match !Asset.shown with [ a ] -> a.frame.t = [| 11.; 2.; 3. |] && a.name = "there" | _ -> false) "";

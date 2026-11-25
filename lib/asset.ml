@@ -4,22 +4,23 @@
 
    A model's code says where one is, as it says where a feature is:
 
-     Asset.show ~frame "../parts/switch.step"
+     Asset.show ~frame ~colour:"#3a3d42" "../parts/switch.step"
 
-   in the frame the code is in at that point, or in [frame] given in that one. The file's
+   in the frame the code is in at that point, or in [frame] given in that one, and of
+   [colour] if one is given. The file's
    own origin is put at the frame's, its axes along the frame's; lengths are millimetres.
    The path is from the design folder. The page draws it with the model.
 
    A STEP file is read by Step and its faces cut into triangles by Mesh; where it is an
    assembly, each part is put where the file places it. *)
 
-type placed = { feature : int; frame : Frame.t;  (** in the world *) path : string; name : string }
+type placed = { feature : int; frame : Frame.t;  (** in the world *) path : string; name : string; colour : Colour.t option }
 
 let shown : placed list ref = ref []
 
-let show ?(frame = Frame.identity) ?name path =
+let show ?(frame = Frame.identity) ?name ?colour path =
   let name = Option.value ~default:(Filename.remove_extension (Filename.basename path)) name in
-  shown := { feature = !Graph.current; frame = Frame.compose !Graph.ambient frame; path; name } :: !shown
+  shown := { feature = !Graph.current; frame = Frame.compose !Graph.ambient frame; path; name; colour = Option.map Colour.of_string colour } :: !shown
 
 (* ---- Triangles ---- *)
 

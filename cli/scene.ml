@@ -110,16 +110,25 @@ let features_of (m : Emit.t) =
   go m.built.graph;
   List.sort (fun (a : Graph.feature) (b : Graph.feature) -> compare (a.file, a.line, a.fid) (b.file, b.line, b.fid)) (List.filter (fun (f : Graph.feature) -> Hashtbl.mem ids f.fid) m.built.features)
 
+let colour = function Some (r, g, b) -> Json.Arr [ num r; num g; num b ] | None -> Json.Null
+
+(* A feature's colour: its own, or that of the nearest feature around it that has one. *)
+let rec coloured (m : Emit.t) (f : Graph.feature) =
+  match f.colour with
+  | Some c -> Some c
+  | None -> Option.bind (List.find_opt (fun (x : Graph.feature) -> x.fid = f.parent) m.built.features) (coloured m)
+
 (* A feature: where it is defined, the frame it sits in if it has one (its origin and
-   three axes, in the world), and the faces it made with the numbers the shader gives them. *)
-let feature ?(faces = []) (f : Graph.feature) =
+   three axes, in the world), its colour if it has one, and the faces it made with the
+   numbers the shader gives them. *)
+let feature ?(faces = []) ?paint (f : Graph.feature) =
   let frame =
     match f.frame with
     | None -> Json.Null
     | Some fr -> Json.Obj [ ("o", vec fr.t); ("x", vec (Frame.direction fr [| 1.; 0.; 0. |])); ("y", vec (Frame.direction fr [| 0.; 1.; 0. |])); ("z", vec (Frame.direction fr [| 0.; 0.; 1. |])) ]
   in
   Json.Obj
-    [ ("id", int f.fid); ("name", Json.Str f.fname); ("path", Json.Str f.path); ("file", Json.Str f.file); ("line", int f.line); ("parent", int f.parent); ("frame", frame);
+    [ ("id", int f.fid); ("name", Json.Str f.fname); ("path", Json.Str f.path); ("file", Json.Str f.file); ("line", int f.line); ("parent", int f.parent); ("frame", frame); ("colour", colour paint);
       ("faces", Json.Arr (List.map (fun (name, id) -> Json.Obj [ ("name", Json.Str name); ("id", int id) ]) faces)) ]
 
 (* Each feature's own faces: the pieces it made, by the name within the feature. *)
@@ -152,7 +161,7 @@ let sketch (d : Sketch.drawn) =
   Json.Obj [ ("feature", int d.feature); ("turned", Json.Bool d.turned); ("loops", Json.Arr (List.map (fun l -> Json.Arr (Array.to_list (Array.map span l))) d.loops)) ]
 
 (* What a model shows from outside (Asset), for the page: its name, where it is as a
-   feature's frame is given, and its triangles as a file the page asks the server for,
+   feature's frame is given, its colour if it has one, and its triangles as a file the page asks the server for,
    named by a number made of its path. The file is made the first time, and again when
    the asset's own file or the kernel has changed: a large STEP file takes seconds. One
    that cannot be read is told with why, and the rest are shown. *)
@@ -172,7 +181,7 @@ let asset (a : Asset.placed) =
     end
   in
   let mesh = try made (); [ ("mesh", Json.Str id) ] with Failure why | Sys_error why -> [ ("said", Json.Str (Printf.sprintf "%s: %s" a.path why)) ] in
-  Json.Obj ([ ("name", Json.Str a.name); ("feature", int a.feature) ] @ frame @ mesh)
+  Json.Obj ([ ("name", Json.Str a.name); ("feature", int a.feature); ("colour", colour a.colour) ] @ frame @ mesh)
 
 (* How the page draws the model: its box, its features and its sketches, and the model
    itself as a shader of its own, with where that shader's gates are entered (Shader): a
@@ -187,7 +196,7 @@ let scene name view =
   Json.Obj
     [ ("name", Json.Str name); ("solo", int view.solo); ("hidden", Json.Arr (List.map int view.hidden)); ("lo", vec m.lo); ("hi", vec m.hi); ("step", num (1. /. graph.lip)); ("nodes", int p.nodes); ("selects", int (Prog.selects p));
       ("root", Json.Str (Sys.getcwd ()));
-      ("features", Json.Arr (List.map (fun f -> feature ~faces:(faces f) f) (features_of m)));
+      ("features", Json.Arr (List.map (fun f -> feature ~faces:(faces f) ?paint:(coloured m f) f) (features_of m)));
       ("sketches", Json.Arr (List.map sketch m.built.sketches));
       ("assets", Json.Arr (List.map asset m.built.assets));
       ("shader", Json.Str s.text);

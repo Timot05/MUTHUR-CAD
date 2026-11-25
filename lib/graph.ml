@@ -41,7 +41,17 @@ and node =
 
    A feature may sit in a frame, given in the frame of the feature around it: that is a
    forward chain. Everything built inside is built in that frame. *)
-type feature = { fid : int; fname : string; path : string; file : string; line : int; parent : int; frame : Frame.t option;  (** in the world *) mutable result : t option }
+type feature = {
+  fid : int;
+  fname : string;
+  path : string;
+  file : string;
+  line : int;
+  parent : int;
+  frame : Frame.t option;  (** in the world *)
+  colour : Colour.t option;  (** its own: what is made inside it is that colour too, unless it has one of its own *)
+  mutable result : t option;
+}
 
 let features : feature list ref = ref []
 let current = ref 0
@@ -66,10 +76,11 @@ let within frame build =
   Fun.protect ~finally:(fun () -> ambient := fst saved; coords := snd saved) build
 
 (* [feature __POS__ "name" (fun () -> ...)]: the graph the function builds, as a feature,
-   in [frame] if one is given. *)
-let feature ?frame (file, line, _, _) fname build =
+   in [frame] if one is given, and of [colour] ("#rrggbb") if one is given. *)
+let feature ?frame ?colour (file, line, _, _) fname build =
   let run () =
-    let f = { fid = List.length !features + 1; fname; path = prefix () ^ fname; file; line; parent = !current; frame = Option.map (fun _ -> !ambient) frame; result = None } in
+    let colour = Option.map Colour.of_string colour in
+    let f = { fid = List.length !features + 1; fname; path = prefix () ^ fname; file; line; parent = !current; frame = Option.map (fun _ -> !ambient) frame; colour; result = None } in
     features := f :: !features;
     current := f.fid;
     let g = Fun.protect ~finally:(fun () -> current := f.parent) build in
