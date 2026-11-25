@@ -1,0 +1,8 @@
+; The builder that carries the compiler (embed.ml). As bytecode, since the compiler it
+; carries makes bytecode and runs it in the program it is part of; with every module of
+; the kernel linked in, used here or not, since a design may use any of them.
+(executable
+ (name embed)
+ (modes byte byte_complete)
+ (libraries mk52 compiler-libs.toplevel)
+ (link_flags (-linkall)))

@@ -194,6 +194,7 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `cli/scene.ml` | 128 | what the page asks: how a model is drawn, its regions, what a ray hits |
 | `cli/serve.ml` | 209 | the page's server: the folder's files, the command run, the code watched |
 | `cli/mcp.ml` | 145 | tools for an agent: `picture`, `section`, `clash`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
+| `embed/embed.ml` | 131 | a project built with no OCaml installed: a builder that carries the compiler, loads a project's files itself and builds a function by name, as the project's own program does. Tried on one project; the command does not use it yet |
 | `web/view.html` | 1174 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
 | `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 232 checks (`dune test`, 15 s), and mk49's experiments |
 
