@@ -40,6 +40,7 @@ type t = {
   worst_at : float array;  (** where that is *)
   corners : int * int;  (** corners put in, of those of the extraction where the surface turns *)
   creases : (int * int) array;  (** the edges that run along creases, by their two vertices *)
+  took : (string * float) list;  (** what was done, in order, and the seconds each took; with how many triangles there were after the march *)
 }
 
 type env = { p : P.t; c : P.ctx; tree : Octree.t; diag : float }
@@ -1266,17 +1267,21 @@ let weld w ~within =
    - of two triangles with the same three corners, one each way round, both are dropped:
      the two sides of a flap with nothing in it;
    - a triangle with three corners in a line (as written) is taken away with the edge
-     its middle corner lies on, the triangle across that edge now ending at that corner.
-   The mesh stays closed through all of it: each side of a triangle still has its
-   partner the other way round. *)
-let tidy ~within (points, on, triangles) creases =
+     its middle corner lies on, the triangle across that edge now ending at that corner;
+   - a closed piece no larger than [speck] is dropped.
+   Each side of a triangle still has its partner the other way round through all of
+   it, and where an edge would come to have more than one pair, the vertices there
+   are left as they were. *)
+let tidy ~within ~speck (points, on, triangles) creases =
   let n = Array.length points in
   let written = Array.map (Array.map (fun x -> Int32.float_of_bits (Int32.bits_of_float x))) points in
+  (* [kept]: vertices not to be made one with another (below) *)
+  let rec attempt kept rounds =
   let up = Array.init n Fun.id in
   let rec find v = if up.(v) = v then v else (let r = find up.(v) in up.(v) <- r; r) in
   let rank v = match on.(v) with Face _ -> 0 | Crease _ -> 1 | Corner _ -> 2 in
   let join u v = let a = find u and b = find v in if a <> b then if rank a >= rank b then up.(b) <- a else up.(a) <- b in
-  Array.iter (fun (a, b, c) -> List.iter (fun (u, v) -> if dist points.(u) points.(v) < within then join u v) [ (a, b); (b, c); (c, a) ]) triangles;
+  Array.iter (fun (a, b, c) -> List.iter (fun (u, v) -> if dist points.(u) points.(v) < within && not (kept.(u) || kept.(v)) then join u v) [ (a, b); (b, c); (c, a) ]) triangles;
   let whole = List.filter (fun (a, b, c) -> a <> b && b <> c && c <> a) in
   (* the same three corners: turned to start at the lowest, a triangle is one of two *)
   let turned (a, b, c) = if a < b && a < c then (a, b, c) else if b < c && b < a then (b, c, a) else (c, a, b) in
@@ -1317,7 +1322,42 @@ let tidy ~within (points, on, triangles) creases =
       if !made = [] then triangles else unflatten (flapless (whole (!made @ List.filter (fun t -> not (Hashtbl.mem gone t)) triangles))) (rounds - 1)
     end
   in
-  let triangles = unflatten (flapless (whole (List.map (fun (a, b, c) -> (find a, find b, find c)) (Array.to_list triangles)))) 8 in
+  let tidied = unflatten (flapless (whole (List.map (fun (a, b, c) -> (find a, find b, find c)) (Array.to_list triangles)))) 8 in
+  (* Making vertices one can leave an edge with four triangles, where they stood round
+     a pocket. The vertices that became the ends of such an edge are then kept apart,
+     and it is done again: a few needles are left, and the mesh is as closed as it
+     came. If a dozen times does not settle it, the mesh is left as it came. *)
+  let ways = Hashtbl.create 4096 in
+  List.iter (fun (a, b, c) -> List.iter (fun (u, v) -> Hashtbl.replace ways (u, v) (1 + Option.value ~default:0 (Hashtbl.find_opt ways (u, v)))) [ (a, b); (b, c); (c, a) ]) tidied;
+  let amiss = Hashtbl.fold (fun (u, v) k l -> if k > 1 || Hashtbl.find_opt ways (v, u) <> Some k then u :: v :: l else l) ways [] in
+  if amiss = [] then (find, tidied)
+  else if rounds = 0 then (Fun.id, Array.to_list triangles)
+  else begin
+    let kept = Array.copy kept in
+    let ends = Hashtbl.create 64 in
+    List.iter (fun v -> Hashtbl.replace ends v ()) amiss;
+    Array.iteri (fun v _ -> if Hashtbl.mem ends (find v) then kept.(v) <- true) kept;
+    attempt kept (rounds - 1)
+  end
+  in
+  let find, triangles = attempt (Array.make n false) 12 in
+  (* A closed piece of the mesh no larger than [speck] any way is dropped: where a gap
+     in the model narrows to less than a cell, what the march makes of it can be a
+     row of bubbles, each a few triangles, which are no part of anything. *)
+  let triangles =
+    let part = Array.init n Fun.id in
+    let rec of_ v = if part.(v) = v then v else (let r = of_ part.(v) in part.(v) <- r; r) in
+    List.iter (fun (a, b, c) -> part.(of_ b) <- of_ a; part.(of_ c) <- of_ a) triangles;
+    let box = Hashtbl.create 64 in
+    List.iter
+      (fun (a, b, c) ->
+        let k = of_ a in
+        let lo, hi = match Hashtbl.find_opt box k with Some b -> b | None -> let b = (Array.copy points.(a), Array.copy points.(a)) in Hashtbl.add box k b; b in
+        List.iter (fun v -> Array.iteri (fun i x -> lo.(i) <- Float.min lo.(i) x; hi.(i) <- Float.max hi.(i) x) points.(v)) [ a; b; c ])
+      triangles;
+    let small k = let lo, hi = Hashtbl.find box k in hi.(0) -. lo.(0) <= speck && hi.(1) -. lo.(1) <= speck && hi.(2) -. lo.(2) <= speck in
+    if Hashtbl.length box <= 1 then triangles else List.filter (fun (a, _, _) -> not (small (of_ a))) triangles
+  in
   let number = Array.make n (-1) and kept = ref 0 in
   List.iter (fun (a, b, c) -> List.iter (fun v -> if number.(v) < 0 then (number.(v) <- !kept; incr kept)) [ a; b; c ]) triangles;
   let alive = Array.make !kept 0 in
@@ -1328,14 +1368,16 @@ let tidy ~within (points, on, triangles) creases =
 
 (* The mesh made few, to within [tol] of the surface: half of that is for closing up,
    and what is then found further off than four fifths of it is split. *)
-let to_tolerance e ~sharp ~least ~longest ~tol mesh creased =
+let to_tolerance ?(lap = ignore) e ~sharp ~least ~longest ~tol mesh creased =
   let w = work e ~sharp ~length:least mesh creased in
   weld w ~within:(0.01 *. least);
   fewer w ~within:(0.5 *. tol) ~longest;
+  lap "made few";
   nearer w ~tol:(0.8 *. tol);
+  lap "held to the tolerance";
   weld w ~within:(0.01 *. least);
   let mesh, creases = pack w in
-  tidy ~within:(0.02 *. tol) mesh creases
+  tidy ~within:(0.02 *. tol) ~speck:(8. *. tol) mesh creases
 
 (* ---- The mesh ---- *)
 
@@ -1380,6 +1422,9 @@ let mesh ?(fit = false) ?(depth = 6) ?tol ?(sharp = 1.) ?(even = true) ~lo ~hi g
   let p = P.compile g in
   let c = P.ctx p in
   let lo, hi = if fit then X.fitted p c ~lo ~hi else (lo, hi) in
+  (* what has been done so far, latest first, with the seconds it took *)
+  let took = ref [] and since = ref (Unix.gettimeofday ()) in
+  let lap what = let now = Unix.gettimeofday () in took := (what, now -. !since) :: !took; since := now in
   let finish e ~size ~largest (points, on, triangles) corners creases =
     let middles = middles e ~size:largest points triangles in
     (* the furthest so far, and where *)
@@ -1405,16 +1450,22 @@ let mesh ?(fit = false) ?(depth = 6) ?tol ?(sharp = 1.) ?(even = true) ~lo ~hi g
           Array.iter (fun (a, b, c) -> List.iter (fun (u, v) -> let k = (min u v, max u v) in match Hashtbl.find_opt along k with Some l -> Hashtbl.replace along k (cross (sub points.(b) points.(a)) (sub points.(c) points.(a)) :: l) | None -> ()) [ (a, b); (b, c); (c, a) ]) triangles;
           Hashtbl.fold (fun (u, v) normals w -> match normals with [ m; n ] when turn m n >= 5. && not (apart on.(u) on.(v)) -> further w (off_crease ?between:(pieces_of on.(u) on.(v)) e ~sharp ~reach:(8. *. tol) true points.(u) points.(v), mid points.(u) points.(v)) | _ -> w) along worst
     in
-    { points; on; triangles; face = Array.map (fun (_, s) -> face e s) middles; names = p.names; size; largest; worst = fst worst; worst_at = snd worst; corners; creases }
+    lap "measured";
+    { points; on; triangles; face = Array.map (fun (_, s) -> face e s) middles; names = p.names; size; largest; worst = fst worst; worst_at = snd worst; corners; creases; took = List.rev !took }
   in
   match tol with
   | None ->
       let e = { p; c; tree = Octree.build p c ~lo ~hi ~depth; diag = dist lo hi } in
       let size, points, triangles = march e ~lo ~hi ~depth in
-      let points, on, triangles, corners = place e ~sharp ~size x (conform e ~sharp ~size points triangles) in
+      lap (Printf.sprintf "marched (%d triangles)" (List.length triangles));
+      let conformed = conform e ~sharp ~size points triangles in
+      lap "attached to creases";
+      let points, on, triangles, corners = place e ~sharp ~size x conformed in
       let ((points, on, triangles) as raw) = uncapped e ~length:size (points, on, triangles) in
       let creases = creased on triangles (part_of e ~size points triangles) in
+      lap "corners put in";
       let mesh, creases = if even then even_out e ~sharp ~length:size raw creases else (raw, creases) in
+      if even then lap "made even";
       finish e ~size ~largest:size mesh corners creases
   | Some tol ->
       let box = Array.fold_left Float.max 0. (sub hi lo) in
@@ -1433,15 +1484,21 @@ let mesh ?(fit = false) ?(depth = 6) ?tol ?(sharp = 1.) ?(even = true) ~lo ~hi g
         let straight () = straight (fun q -> let _, v, _ = node p c l nodes cell.state q in v) i j kk s ~within:(0.25 *. tol) in
         d < first || not (if cell.live = 0 then straight () else plain p c l k edges corners ~straight ~within:(0.25 *. tol) cell i j kk s d)
       in
+      lap "edges laid in cells";
       let tree, leaves = sized p c l ~lo ~wanted in
+      lap (Printf.sprintf "cells sized (%d)" (List.length leaves));
       let e = { p; c; tree; diag = dist lo hi } in
       let largest = List.fold_left (fun m ((cell : Octree.cell), _, _, _, _) -> if cell.surface then Float.max m cell.size else m) least leaves in
       let points, triangles = march_sized e l nodes leaves in
+      lap (Printf.sprintf "marched (%d triangles)" (List.length triangles));
       let size_at x = match Octree.find tree x with Some cell -> cell.size | None -> least in
-      let points, on, triangles, corners = place ~size_at ~close:(2. *. tol) e ~sharp ~size:least x (conform e ~sharp ~size:least points triangles) in
+      let conformed = conform e ~sharp ~size:least points triangles in
+      lap "attached to creases";
+      let points, on, triangles, corners = place ~size_at ~close:(2. *. tol) e ~sharp ~size:least x conformed in
       let ((points, on, triangles) as raw) = uncapped e ~length:least (points, on, triangles) in
       let creases = creased on triangles (part_of e ~size:largest points triangles) in
-      let mesh, creases = if even then to_tolerance e ~sharp ~least ~longest:(0.25 *. box) ~tol raw creases else (raw, creases) in
+      lap "corners put in";
+      let mesh, creases = if even then to_tolerance ~lap e ~sharp ~least ~longest:(0.25 *. box) ~tol raw creases else (raw, creases) in
       finish e ~size:least ~largest mesh corners creases
 
 (* ---- What it is like ---- *)
