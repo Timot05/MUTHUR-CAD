@@ -16,9 +16,13 @@
      mk52 extract <model> [cells]    its edges and corners (32, 64 or 128 cells across it:
                                      64 unless said), printed, and drawn in the page if
                                      it is open
-     mk52 mesh <model> [cells] [raw] its surface as even triangles attached to its creases
-                                     and corners: an STL file with a solid for each face,
-                                     what the mesh is like, and a picture of it (raw: as
+     mk52 mesh <model> tol=0.05      its surface as triangles attached to its creases and
+                                     corners, none further than that from it and no more
+                                     of them than that takes: an STL file (binary, one
+                                     solid) for a slicer, what the mesh is like, and a
+                                     picture of it
+     mk52 mesh <model> [cells] [raw] the same in cells all of one size (32 to 256 across
+                                     it: 64 unless said) and its triangles even (raw: as
                                      marched, not made even)
      mk52 outline <model> [out=]     the outline of a flat part, a board's: the edges round
                                      its top, holes too, as the lines, arcs and circles
@@ -224,9 +228,12 @@ let () =
         if List.mem m.name (Place.opened ()) then hand ~edges:json m;
         print_endline text
     | "mesh" :: name :: words ->
-        let depth = match List.filter (( <> ) "raw") words with [] | [ "64" ] -> 6 | [ "32" ] -> 5 | [ "128" ] -> 7 | [ "256" ] -> 8 | _ -> failwith "cells across: 32, 64, 128 or 256; raw to leave the triangles as marched" in
+        let said = "after the model: tol=0.05, a length no triangle is to be further from the surface than; or cells across, 32, 64, 128 or 256; raw to leave the triangles as marched" in
+        let tol = List.find_map (fun w -> if String.length w > 4 && String.sub w 0 4 = "tol=" then Some (match float_of_string_opt (String.sub w 4 (String.length w - 4)) with Some v when v > 0. -> v | _ -> failwith said) else None) words in
+        let depth = match List.filter (fun w -> w <> "raw" && not (String.contains w '=')) words with [] | [ "64" ] -> 6 | [ "32" ] -> 5 | [ "128" ] -> 7 | [ "256" ] -> 8 | _ -> failwith said in
+        if List.exists (fun w -> String.contains w '=' && not (String.length w > 4 && String.sub w 0 4 = "tol=")) words then failwith said;
         let m = Project.model name in
-        let text, surface = Project.mesh ~depth ~even:(not (List.mem "raw" words)) m in
+        let text, surface = Project.mesh ~depth ?tol ~even:(not (List.mem "raw" words)) m in
         let out = Place.surface m.name and pic = Place.picture (m.name ^ ".mesh") in
         Out_channel.with_open_bin out (fun oc -> output_string oc (Surface.stl surface));
         Out_channel.with_open_bin pic (fun oc -> output_string oc (Project.picture ~w:1200 ~h:900 ~surface (Project.framed surface m)));

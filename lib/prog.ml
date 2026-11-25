@@ -130,6 +130,7 @@ type ctx = {
   stamp : int array;
   seen : int array;  (** for walks over the nodes (Octree) *)
   face : int array;
+  part : int array;  (** the piece of surface the node's face is of *)
   feat : int array;  (** the feature of the node's face *)
   mutable epoch : int;
   mutable full : bool;  (** gradients, faces and reached selects too; otherwise values only *)
@@ -137,14 +138,15 @@ type ctx = {
   mutable force : int -> int;
   mutable reached : int list;
   mutable count : int;  (** point evaluations, for reports *)
+  met : (int * int list, int) Hashtbl.t;  (** the made faces this scratch has met (see [made_face]) *)
 }
 
 let unforced _ = 0
 
 let ctx p =
   let r = Array.length p.code in
-  { v = Array.copy p.k; dx = Array.make r 0.; dy = Array.make r 0.; dz = Array.make r 0.; stamp = Array.make p.nodes 0; seen = Array.make p.nodes 0; face = Array.make p.nodes (-1); feat = Array.make p.nodes 0;
-    epoch = 0; full = false; state = Bytes.empty; force = unforced; reached = []; count = 0 }
+  { v = Array.copy p.k; dx = Array.make r 0.; dy = Array.make r 0.; dz = Array.make r 0.; stamp = Array.make p.nodes 0; seen = Array.make p.nodes 0; face = Array.make p.nodes (-1); part = Array.make p.nodes (-1); feat = Array.make p.nodes 0;
+    epoch = 0; full = false; state = Bytes.empty; force = unforced; reached = []; count = 0; met = Hashtbl.create 64 }
 
 (* No select decided: the whole graph. *)
 let whole p = Bytes.make p.nodes '\000'
@@ -212,28 +214,53 @@ let run_full p c x n =
     | _ -> ()
   done
 
+(* A made face is named the first time it is met, in the program itself, which several
+   cores may be evaluating at once, each with a scratch of its own: so a scratch keeps
+   the made faces it has met, and the program's are read and added to by one core at a
+   time. *)
+let naming = Mutex.create ()
+
 let made_face p c n =
   let ins = Array.to_list (Array.map (fun i -> c.face.(i)) p.inputs.(n)) in
-  match Hashtbl.find_opt p.blends (n, ins) with
+  match Hashtbl.find_opt c.met (n, ins) with
   | Some f -> f
   | None when p.keep.(n) = -3 && List.for_all (( = ) (List.hd ins)) ins -> List.hd ins
   | None ->
-      let f = face_id p (Printf.sprintf "%s[%s]" p.made.(n) (String.concat "," (List.map (face_name p) ins))) in
-      Hashtbl.replace p.blends (n, ins) f;
+      let f =
+        Mutex.protect naming (fun () ->
+            match Hashtbl.find_opt p.blends (n, ins) with
+            | Some f -> f
+            | None ->
+                let f = face_id p (Printf.sprintf "%s[%s]" p.made.(n) (String.concat "," (List.map (face_name p) ins))) in
+                Hashtbl.replace p.blends (n, ins) f;
+                f)
+      in
+      Hashtbl.replace c.met (n, ins) f;
       f
+
+(* The piece of surface at a node, as a number: a piece's own node; through an
+   operation, its inputs' pieces with the operation, as a made face is its inputs'
+   faces with it. Two pieces can have one face name (the spans of a sketch given one
+   name, turned or pulled) and still meet in an edge: a mesh must tell them apart. *)
+let made_part p c n =
+  let ins = p.inputs.(n) in
+  let first = c.part.(ins.(0)) in
+  if p.keep.(n) = -3 && Array.for_all (fun i -> c.part.(i) = first) ins then first
+  else Array.fold_left (fun h i -> (h * 1000003) lxor c.part.(i)) (p.nodes + n) ins
 
 let rec ev p c x n =
   if geti c.stamp n <> c.epoch then begin
     Array.unsafe_set c.stamp n c.epoch;
     let ins = Array.unsafe_get p.inputs n in
     match geti p.kind n with
-    | 0 -> if c.full then (run_full p c x n; c.face.(n) <- p.fixed.(n); c.feat.(n) <- p.feature.(n)) else run p c x n
+    | 0 -> if c.full then (run_full p c x n; c.face.(n) <- p.fixed.(n); c.part.(n) <- n; c.feat.(n) <- p.feature.(n)) else run p c x n
     | 1 ->
         for i = 0 to Array.length ins - 1 do ev p c x (geti ins i) done;
         if c.full then begin
           run_full p c x n;
           let kp = p.keep.(n) in
           c.face.(n) <- (if kp >= 0 then c.face.(ins.(kp)) else if kp = -1 || kp = -3 then made_face p c n else -1);
+          c.part.(n) <- (if kp >= 0 then c.part.(ins.(kp)) else if kp = -1 || kp = -3 then made_part p c n else -1);
           c.feat.(n) <- (if kp >= 0 then c.feat.(ins.(kp)) else p.feature.(n))
         end
         else run p c x n
@@ -253,7 +280,7 @@ let rec ev p c x n =
         ev p c x br;
         let r = geti p.last n and s = geti p.last br in
         set c.v r (get c.v s);
-        if c.full then (c.dx.(r) <- c.dx.(s); c.dy.(r) <- c.dy.(s); c.dz.(r) <- c.dz.(s); c.face.(n) <- c.face.(br); c.feat.(n) <- c.feat.(br))
+        if c.full then (c.dx.(r) <- c.dx.(s); c.dy.(r) <- c.dy.(s); c.dz.(r) <- c.dz.(s); c.face.(n) <- c.face.(br); c.part.(n) <- c.part.(br); c.feat.(n) <- c.feat.(br))
   end
 
 (* A new point: forget what was computed. *)
@@ -276,9 +303,10 @@ let value ?(force = unforced) p c state x =
 
 type dual = { v : float; g : float array }
 
-(* The field at a point: its value and gradient, the face active there, and every
+(* The field at a point: its value and gradient, the face active there (and which piece
+   of surface it is of, for when two of a name meet), and every
    undecided select on the way with its guard's value and gradient. *)
-type sample = { d : dual; face : int; feature : int; reached : (int * dual) list }
+type sample = { d : dual; face : int; part : int; feature : int; reached : (int * dual) list }
 
 let dual (c : ctx) r = { v = c.v.(r); g = [| c.dx.(r); c.dy.(r); c.dz.(r) |] }
 
@@ -287,4 +315,4 @@ let eval ?(force = unforced) p c state x =
   c.force <- force;
   ev p c x p.root;
   c.force <- unforced;
-  { d = dual c p.last.(p.root); face = c.face.(p.root); feature = c.feat.(p.root); reached = List.map (fun s -> (s, dual c p.last.(p.inputs.(s).(0)))) c.reached }
+  { d = dual c p.last.(p.root); face = c.face.(p.root); part = c.part.(p.root); feature = c.feat.(p.root); reached = List.map (fun s -> (s, dual c p.last.(p.inputs.(s).(0)))) c.reached }

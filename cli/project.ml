@@ -618,22 +618,40 @@ let framed (s : Surface.t) (m : Emit.t) =
   if Array.length s.points = 0 then m else { m with lo = Array.map (fun v -> v -. room) lo; hi = Array.map (fun v -> v +. room) hi }
 
 (* A model's surface as triangles attached to its creases and corners (lib/surface.ml),
-   its cells counted across the model as extraction's are, and what the mesh is like.
-   Without [even] it is left as marched: attached, but its triangles any shape. *)
-let mesh ?(depth = 6) ?(even = true) (m : Emit.t) =
-  let s = Surface.mesh ~fit:true ~depth ~even ~lo:m.lo ~hi:m.hi m.built.graph (topology ~depth m) in
+   and what the mesh is like. With [tol], a length, it is to that tolerance: no
+   triangle further than that from the surface, the cells sized to the surface and
+   the triangles as few as that allows, which is what a printer's slicer wants.
+   Otherwise its cells are counted across the model as extraction's are and its
+   triangles made even; without [even] it is left as marched: attached, but its
+   triangles any shape. *)
+let mesh ?(depth = 6) ?tol ?(even = true) (m : Emit.t) =
+  (* to a tolerance the edges are found at 256 cells across, whatever the model *)
+  let found = if tol = None then depth else 8 in
+  let s = Surface.mesh ~fit:true ~depth ?tol ~even ~lo:m.lo ~hi:m.hi m.built.graph (topology ~depth:found m) in
   let q = Surface.quality s in
   let n = Array.length q.angles in
   let under a = 100. *. float_of_int (Array.fold_left (fun k v -> if v < a then k + 1 else k) 0 q.angles) /. float_of_int (max 1 n) in
   let faces = List.length (List.sort_uniq compare (Array.to_list s.face)) in
-  ( Printf.sprintf
-      "%s at %d cells across, of %.3g each: %d triangles, %d vertices (%d on creases and corners), %d faces.\n%s\nCorners where the surface turns: %d of %d put in.\nA triangle's smallest angle: %.2g deg at worst, %.3g at the middle; %.1f %% of triangles under 20 deg, %.1f %% under 5.\nA triangle's middle is at most %.3g from the surface."
-      m.name (1 lsl depth) s.size n (Array.length s.points) q.on_creases faces
-      (if q.open_edges = 0 && q.crowded = 0 then "Closed: every edge has two triangles, one each way round." else Printf.sprintf "NOT CLOSED: %d edges with one triangle, %d with more than two or two the same way round." q.open_edges q.crowded)
-      (fst s.corners) (snd s.corners)
-      (if n = 0 then 0. else q.angles.(0))
-      (if n = 0 then 0. else q.angles.(n / 2))
-      (under 20.) (under 5.) s.worst,
+  let closed =
+    if q.open_edges = 0 && q.crowded = 0 then "Closed: every edge has two triangles, one each way round."
+    else Printf.sprintf "NOT CLOSED: %d edges with one triangle, %d with more than two or two the same way round." q.open_edges q.crowded
+  in
+  let counts = Printf.sprintf "%d triangles, %d vertices (%d on creases and corners), %d faces" n (Array.length s.points) q.on_creases faces in
+  let corners = Printf.sprintf "Corners where the surface turns: %d of %d put in." (fst s.corners) (snd s.corners) in
+  let at = Printf.sprintf "(%.3f, %.3f, %.3f)" s.worst_at.(0) s.worst_at.(1) s.worst_at.(2) in
+  ( (match tol with
+    | None ->
+        Printf.sprintf "%s at %d cells across, of %.3g each: %s.\n%s\n%s\nA triangle's smallest angle: %.2g deg at worst, %.3g at the middle; %.1f %% of triangles under 20 deg, %.1f %% under 5.\nA triangle's middle is at most %.3g from the surface."
+          m.name (1 lsl depth) s.size counts closed corners
+          (if n = 0 then 0. else q.angles.(0))
+          (if n = 0 then 0. else q.angles.(n / 2))
+          (under 20.) (under 5.) s.worst
+    | Some tol ->
+        Printf.sprintf "%s to within %g, in cells of %.3g to %.3g: %s.\n%s\n%s\n%s\n%s"
+          m.name tol s.size s.largest counts closed corners
+          (if q.empty = 0 then "No triangle is without area as written." else Printf.sprintf "%d TRIANGLES WITHOUT AREA as written." q.empty)
+          (if s.worst <= tol then Printf.sprintf "No triangle is further than %.3g from the surface." s.worst
+           else Printf.sprintf "A TRIANGLE IS %.3g FROM THE SURFACE, more than was asked, at %s: something there is thinner than the tolerance, or has faces all but on one another." s.worst at)),
     s )
 
 (* What an agent working on a function is told: where it is, how to work, and what there

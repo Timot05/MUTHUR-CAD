@@ -141,7 +141,8 @@ What there is to build with is the kernel's own code, which a design folder reac
 | `mk52 skins <model>` | its faces of no thickness: where two faces lie on one surface with air on both sides, each with the two faces and where |
 | `mk52 clash <model> [other] [gap=0.3]` | whether its parts run into each other, touch, or are nearer than the gap: every pair, and its bought parts against them; or its parts against another model's. What a design says is meant (`Clash.allow`) is listed apart |
 | `mk52 section <model> z=<n>` | a cut through it where that coordinate (`x=`, `y=` or `z=`) is that number: what is solid, each part in a colour of its own, with a scale; the other two `from:to` to look closer; `text` for the cut as letters |
-| `mk52 mesh <model> [cells] [raw]` | its surface as even triangles attached to its creases and corners: an STL file, what the mesh is like, and a picture |
+| `mk52 mesh <model> tol=0.05` | its surface as triangles attached to its creases and corners, none further than that from it and no more than that takes: a binary STL file of one solid, for a slicer, what the mesh is like, and a picture |
+| `mk52 mesh <model> [cells] [raw]` | the same in cells all of one size (32 to 256 across the model) with even triangles |
 | `mk52 brief <model>` | what an agent working on that function is told |
 | `mk52 mcp` | the kernel and the page as tools for an agent |
 
@@ -173,7 +174,7 @@ On macOS the builder's one outside library (zstd, which OCaml's bytecode runtime
 - **One machine so far.** macOS on Apple silicon. Linux and Windows are untried, and so are other graphics cards.
 - **Still moving.** There is no version yet and nothing promises that a design written today builds unchanged next month.
 - **Bought parts are only shown.** A STEP or STL file is not part of the solid: it cannot be cut or joined, and the clash check holds it against the designed parts by the points of its triangles only.
-- **The mesh is approximate.** It keeps creases and corners, but on a part 200 mm long a triangle was found up to 0.8 mm off the true surface at the finest setting.
+- **The mesh is to a tolerance you give** (`tol=`), but what is thinner than that tolerance may be lost: a wall that thins to nothing, two faces all but on one another. The report says where, if anywhere, a triangle is further off than was asked.
 - **The clash check is slow on large assemblies:** about a minute for eighty parts.
 - **No drawings.** There are pictures, cuts, meshes and a board's outline, but no dimensioned 2D drawings and no STEP export.
 

@@ -223,6 +223,37 @@ let mesh name depth =
   in
   check (Printf.sprintf "%s: %d cells, meshed" name (1 lsl depth)) (faults = []) (String.concat "; " faults)
 
+(* A mesh to a tolerance is closed, has no triangle without area as written, has all
+   the corners where the surface turns, and no triangle of it is further from the
+   surface than the tolerance: at more places than the mesher itself looks, the
+   middles of its sides and its own middle and sixths. Its file is one solid, binary,
+   of the length its count of triangles says. *)
+let mesh_to name tol =
+  let lo, hi, g = Models.Sets.find name in
+  let g = g () in
+  let h = hold ~lo ~hi g in
+  let x = X.extract ~depth:6 ~lo ~hi g in
+  let m = Surface.mesh ~tol ~lo ~hi g x in
+  let q = Surface.quality m in
+  let far =
+    Array.fold_left
+      (fun w (a, b, c) ->
+        let pa = m.points.(a) and pb = m.points.(b) and pc = m.points.(c) in
+        let at u v t = X.add (X.scale u pa) (X.add (X.scale v pb) (X.scale t pc)) in
+        List.fold_left (fun w p -> Float.max w (off (probe h p).d)) w [ at 0.5 0.5 0.; at 0. 0.5 0.5; at 0.5 0. 0.5; at (1. /. 3.) (1. /. 3.) (1. /. 3.); at (2. /. 3.) (1. /. 6.) (1. /. 6.); at (1. /. 6.) (2. /. 3.) (1. /. 6.); at (1. /. 6.) (1. /. 6.) (2. /. 3.) ])
+      0. m.triangles
+  in
+  let file = Surface.stl m in
+  let faults =
+    (if q.open_edges = 0 && q.crowded = 0 then [] else [ Printf.sprintf "not closed: %d edges with one triangle, %d with too many" q.open_edges q.crowded ])
+    @ (if q.empty = 0 then [] else [ Printf.sprintf "%d triangles without area" q.empty ])
+    @ (if fst m.corners = snd m.corners then [] else [ Printf.sprintf "%d of %d corners put in" (fst m.corners) (snd m.corners) ])
+    @ (if m.worst <= tol then [] else [ Printf.sprintf "said to be %g from the surface" m.worst ])
+    @ (if far <= tol then [] else [ Printf.sprintf "a triangle is %g from the surface" far ])
+    @ if String.length file = 84 + (50 * Array.length m.triangles) && Int32.to_int (String.get_int32_le file 80) = Array.length m.triangles then [] else [ "its file is not as long as its triangles say" ]
+  in
+  check (Printf.sprintf "%s: meshed to within %g, in %d triangles" name tol (Array.length m.triangles)) (faults = []) (String.concat "; " faults)
+
 (* ---- The shader's gates ---- *)
 
 (* The page's shader skips a gate where its table says every select in it keeps its
@@ -507,6 +538,7 @@ let () =
       extraction name ~lo ~hi (g ()) expected [ 6; 7 ])
     [ ("arm", (48, 82, 10)); ("bracket", (36, 65, 11)) ];
   List.iter (fun (name, depth) -> mesh name depth) [ ("cube-three-fillets", 5); ("pyramid", 5); ("cube-hole", 5); ("bracket", 5); ("block", 6); ("arm", 6) ];
+  List.iter (fun (name, tol) -> mesh_to name tol) [ ("cube-three-fillets", 0.01); ("pyramid", 0.01); ("cube-hole", 0.01); ("bracket", 0.05); ("block", 0.05); ("arm", 0.05) ];
   List.iter (fun (name, least) -> gates name least) [ ("bracket", 240); ("bracket", 40); ("block", 40); ("arm", 40); ("pyramid", 40) ];
   List.iter (fun name -> List.iter (regions name) [ 1; 40; 400 ]) [ "bracket"; "block"; "arm"; "pyramid"; "cube-fillet"; "torus" ];
   chamfers ();

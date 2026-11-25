@@ -130,37 +130,53 @@ let is_edge e s x = present e s x (probe ~force:(take s 1) e x) && present e s x
 
 (* ---- Traced samples, for de-duplication and flags ---- *)
 
+(* The points are kept three ways, by the cell they are in: all of them, those of each
+   pair of faces, and those of each face. So a question is answered from the points it
+   is about, and stops at the first that answers it: where many edges run close
+   together (a grille's holes) a cell holds thousands. *)
 module Seen = struct
-  type t = { cell : float; table : (int * int * int, float array * (int * int)) Hashtbl.t }
+  type t = {
+    cell : float;
+    all : (int * int * int, float array list ref) Hashtbl.t;
+    pairs : (int * int * int * int * int, float array list ref) Hashtbl.t;
+    faces : (int * int * int * int, float array list ref) Hashtbl.t;
+  }
 
-  let create cell = { cell; table = Hashtbl.create 1024 }
+  let create cell = { cell; all = Hashtbl.create 1024; pairs = Hashtbl.create 1024; faces = Hashtbl.create 1024 }
   let key t x = (int_of_float (floor (x.(0) /. t.cell)), int_of_float (floor (x.(1) /. t.cell)), int_of_float (floor (x.(2) /. t.cell)))
-  let add t x tags = Hashtbl.add t.table (key t x) (x, tags)
+  let put table k x = match Hashtbl.find_opt table k with Some l -> l := x :: !l | None -> Hashtbl.add table k (ref [ x ])
+
+  let add t x (f, g) =
+    let i, j, k = key t x in
+    put t.all (i, j, k) x;
+    put t.pairs (i, j, k, f, g) x;
+    put t.faces (i, j, k, f) x;
+    if g <> f then put t.faces (i, j, k, g) x
+
+  (* Is one of the points [held] gives for a cell within [r] of x, in the cells about x? *)
+  let about t x r held =
+    let i, j, k = key t x and m = int_of_float (ceil (r /. t.cell)) and r2 = r *. r in
+    let within (y : float array) = let a = x.(0) -. y.(0) and b = x.(1) -. y.(1) and c = x.(2) -. y.(2) in (a *. a) +. (b *. b) +. (c *. c) <= r2 in
+    let found = ref false in
+    (try
+       for a = -m to m do
+         for b = -m to m do
+           for c = -m to m do
+             match held (i + a) (j + b) (k + c) with Some l when List.exists within !l -> found := true; raise Exit | _ -> ()
+           done
+         done
+       done
+     with Exit -> ());
+    !found
 
   (* Some traced point within [r] of x, with [tags] if given. *)
   let near t ?tags x r =
-    let i, j, k = key t x and m = int_of_float (ceil (r /. t.cell)) and found = ref false in
-    for a = -m to m do
-      for b = -m to m do
-        for c = -m to m do
-          if not !found then
-            List.iter (fun (y, tg) -> if dist x y <= r && (tags = None || tags = Some tg) then found := true) (Hashtbl.find_all t.table (i + a, j + b, k + c))
-        done
-      done
-    done;
-    !found
+    match tags with
+    | Some (f, g) -> about t x r (fun i j k -> Hashtbl.find_opt t.pairs (i, j, k, f, g))
+    | None -> about t x r (fun i j k -> Hashtbl.find_opt t.all (i, j, k))
 
   (* Some traced point within [r] of x on an edge of [face]. *)
-  let near_face t face x r =
-    let i, j, k = key t x and m = int_of_float (ceil (r /. t.cell)) and found = ref false in
-    for a = -m to m do
-      for b = -m to m do
-        for c = -m to m do
-          if not !found then List.iter (fun (y, (f, g)) -> if (f = face || g = face) && dist x y <= r then found := true) (Hashtbl.find_all t.table (i + a, j + b, k + c))
-        done
-      done
-    done;
-    !found
+  let near_face t face x r = about t x r (fun i j k -> Hashtbl.find_opt t.faces (i, j, k, face))
 end
 
 (* ---- Tracing ---- *)
@@ -586,19 +602,26 @@ let extract ?(fit = false) ?(depth = 6) ~lo ~hi g =
      share one dividing surface (the spans of a sketch do), and which of them is reached
      on it is down to rounding: if [s] is not, another whose guard is 0 at x may be the
      one that decides there, and its curve is the same. *)
-  let rec walk ?(others = true) s x =
+  (* A walk that goes [on] from the end of another does not start where one of the same
+     select has started before. A walk leaves nothing in [seen] where it finds no edge
+     (three faces along one curve, and which two are read at a point is down to
+     rounding): its two ends would send it to its neighbours, they back to it, and so on
+     without end. *)
+  let started = Seen.create (2. *. st.hmax) in
+  let rec walk ?(others = true) ?(on = false) s x =
     match state e s x with
-    | Some tags when not (Seen.near seen ~tags x st.hmax) ->
+    | Some tags when (not (Seen.near seen ~tags x st.hmax)) && not (on && Seen.near started ~tags:(s, s) x (st.hmax /. 16.)) ->
         incr traced;
+        Seen.add started x (s, s);
         let ps, fs, beyond = trace e s seen x in
         pieces := ps @ !pieces;
         flags := fs @ !flags;
-        List.iter (fun y -> Option.iter (walk s) (project e s y)) beyond
+        List.iter (fun y -> Option.iter (walk ~on:true s) (project e s y)) beyond
     | Some _ -> ()
     | None ->
         if others then
           List.iter
-            (fun (o, (q : P.dual)) -> if o <> s && Float.abs q.v <= st.tol *. norm q.g then Option.iter (walk ~others:false o) (project e o x))
+            (fun (o, (q : P.dual)) -> if o <> s && Float.abs q.v <= st.tol *. norm q.g then Option.iter (walk ~others:false ~on o) (project e o x))
             (probe e x).reached
   in
   let box (cell : Octree.cell) = (cell.lo, Array.map (fun l -> l +. cell.size) cell.lo) in
