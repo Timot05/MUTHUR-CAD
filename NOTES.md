@@ -125,7 +125,7 @@ A picture is two passes. The regions find each pixel's hit: how far along its ra
 
 ## How the parts meet
 
-Each part has one job. The command (`cli/`, OCaml) builds, measures and draws pictures, and exits. The page (`web/view.html`) is the window, and holds no model. Between them a small server (`mk52 serve`, started by `mk52 open`) stays for as long as the page is wanted: it listens on this machine only, and does no more than hand the page what is in the design folder's `_mk52/` and run the command for what the page needs worked out. So a kernel built again is the kernel the next click gets, and the page is read from the tool each time it is loaded: neither needs the server started again.
+Each part has one job. The command (`cli/`, OCaml) builds, measures and draws pictures, and exits. The page (`web/view.html`) is the window, and holds no model. Between them a small server (`mk52 serve`, started by `mk52 open`) stays for as long as the page is wanted: it listens on this machine only, and does no more than hand the page what is in the design folder's `_mk52/` and run the command for what the page needs worked out. So a kernel built again is the kernel the next click gets, and the page is read from the tool each time it is loaded: neither needs the server started again. A model already built is good only for the kernel it was built with (its file begins with a stamp of the kernel's source, and a reader with another stamp refuses it), so the server watches the kernel's source as it watches the design's code, and builds every project again when it changes. The server itself is the one thing a change to `cli/serve.ml` needs started again.
 
 | In `_mk52/` | Written by | What it is |
 |---|---|---|

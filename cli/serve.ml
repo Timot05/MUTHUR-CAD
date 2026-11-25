@@ -5,7 +5,9 @@
    command for, as a person would in a terminal, so a kernel built again is the kernel
    the next request gets; the page itself is read from the tool each time it is asked
    for. What it does on its own is watch the design's code: a project whose code was
-   saved is built again (mk52 refresh), and the page sees the models change.
+   saved is built again (mk52 refresh), and the page sees the models change. It watches
+   the kernel's source too: a built model is good for the kernel it was built with and
+   no other (Emit), so when that changes every project is built again.
 
      GET  /                          the page
      GET  /look                      what is open, the model to bring to the front, and
@@ -53,14 +55,17 @@ let saved () =
   List.map (fun p -> (p, List.fold_left (fun t f -> if Filename.basename f = "entry.ml" then t else Float.max t (changed f)) 0. (try Place.sources p with Sys_error _ -> []))) (Place.projects ())
 
 (* A project whose code changed is built again by the command: its functions listed, its
-   open models rewritten. At the start that is every project. *)
+   open models rewritten. So is every project when the kernel's source changed, and at
+   the start. *)
 let watch () =
-  let built = ref [] in
+  let built = ref [] and kernel = ref "" in
   while true do
-    let now = saved () in
-    if now <> !built then begin
-      let stale = List.filter_map (fun (p, t) -> if List.assoc_opt p !built = Some t then None else Some p) now in
+    (* a file being saved may be gone for a moment: the kernel is then as it was *)
+    let now = saved () and stamp = try Place.kernel () with Sys_error _ -> !kernel in
+    if now <> !built || stamp <> !kernel then begin
+      let stale = List.filter_map (fun (p, t) -> if stamp = !kernel && List.assoc_opt p !built = Some t then None else Some p) now in
       built := now;
+      kernel := stamp;
       Mutex.protect lock (fun () -> building := true);
       let ok, printed, err = run ("refresh" :: stale) in
       Mutex.protect lock (fun () -> building := false; said := if ok then "" else String.trim (printed ^ err))
