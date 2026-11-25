@@ -174,7 +174,8 @@
       <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found: mk52 extract &lt;model&gt;">Edges</button>
       <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
       <button id="showFrames" aria-pressed="true" title="The frames its features sit in">Frames</button>
-      <button id="showAssets" aria-pressed="true" title="What the model shows from outside, each where its code puts it: STEP files and meshes. They are seen only: nothing is cut by them, and a click goes through them.">Assets</button>
+      <button id="showCopper" aria-pressed="true" title="The copper of the model's circuit boards (lib/circuit.ml), drawn on each board where it is: every piece on its layer, a net a colour. With Faces off it is copper's own colour.">Copper</button>
+      <button id="showAssets" aria-pressed="true" title="What the model shows from outside, each where its code puts it: STEP files and meshes, and the parts on its circuit boards, each a box as big as the part. They are seen only: nothing is cut by them, and a click goes through them.">Assets</button>
       <button id="faces" aria-pressed="true" title="Each face in a colour of its own, and what is picked out shown. Off: the object as it is, every part in the colour its code gives it, grey where it gives none.">Faces</button>
     </div>
     <div class="group">
@@ -214,7 +215,7 @@ const section = { on: false, axis: 2, at: null, flip: false }
 // `spelt`: the measurement whose numbers are spelt out over the picture.
 let measuring = false, started = null, spelt = null
 const measures = []
-const show = { edges: true, sketches: true, frames: true, assets: true }
+const show = { edges: true, sketches: true, frames: true, assets: true, copper: true }
 let said = '', building = false, asking = 0, took = null
 // what was last seen of the folder: the model in front as the command wrote it, and the
 // note of which model to bring to the front
@@ -271,8 +272,9 @@ struct Uniforms {
   cells: vec4i,                                         // the grid's cells along x, y and z
   chosen: vec4i,                                        // the feature picked out, the last feature made in it, the face picked out (-1: none), whether faces are shown
   project: mat4x4f,                                     // the world to the picture, for what is drawn over the model
-  line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel
+  line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel; and whether any body is switched off
   cut: vec4f,                                           // the cut: a plane's normal and how far along it; what is beyond is left out. Nothing: no cut
+  off: array<vec4u, 8>,                                 // the model's bodies that are switched off, a bit each (lib/joined.ml)
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(2) var paint: texture_2d<f32>;  // the colour of each feature that has one, by its number, in a row
@@ -342,6 +344,16 @@ fn sliced(h: vec3f, feat: i32, px: vec2f) -> Seen {
 
 // The model: a ray a pixel, marched through the kernel's model().
 const marching = `
+// How far a march goes on from q, where the field is d. With a body switched off the
+// field may be further from zero than the model's is, though only inside the cell of the
+// gates' grid that q is in (lib/shader.ml): so a step then ends just past that cell's wall.
+fn stride(q: vec3f, rd: vec3f, d: f32) -> f32 {
+  let far = abs(d) * u.size.w;
+  if (u.line.z == 0.0) { return far; }
+  let wall = u.grid.xyz + (floor((q - u.grid.xyz) / u.grid.w) + step(vec3f(0.0), rd)) * u.grid.w;
+  let to = select((wall - q) / rd, vec3f(1e30), abs(rd) < vec3f(1e-9));
+  return min(far, max(min(to.x, min(to.y, to.z)), 0.0) + 2.0 * u.depth.x);
+}
 @fragment fn marched(@builtin(position) at: vec4f) -> Seen {
   let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
   let ro = u.eye.xyz;
@@ -376,12 +388,12 @@ const marching = `
       if (touching) {
         touching = false;
         if (d * medium < 0.0) { hit = true; }
-        else { if (medium == 0.0) { medium = sign(d); } t += abs(d) * u.size.w; if (t > stretch.y) { break; } }
+        else { if (medium == 0.0) { medium = sign(d); } t += stride(q, rd, d); if (t > stretch.y) { break; } }
       } else if (abs(d) < u.depth.x) {
         touching = true; h = q; face = f; feat = ft;
         if (medium == 0.0) { medium = sign(d); }
         t += 2.0 * u.depth.x;
-      } else { medium = sign(d); t += abs(d) * u.size.w; if (t > stretch.y) { break; } }
+      } else { medium = sign(d); t += stride(q, rd, d); if (t > stretch.y) { break; } }
     } else { n += taps[k] * d; k++; if (k == 4) { break; } }
   }
   if (!hit) { return seen; }
@@ -557,6 +569,63 @@ struct Placed { @builtin(position) position: vec4f, @location(0) world: vec3f, @
 }
 `
 
+// A circuit board's copper (lib/circuit.ml), drawn on the board where it is in the model:
+// each piece a flat patch on its layer's height in the board's frame, lifted towards the
+// eye by a little more than the surface is found to, so it lies on the board's face and
+// not in it, and under the parts that stand on it. A piece is its shape's
+// numbers (a line, a rectangle or an arc with a width), and a pixel is as full of it as
+// the shape says; what is in front of the board hides it, by depth. The front's copper
+// is on the front face and the back's on the back; the layers between are inside the
+// board, and are seen when the board is hidden.
+const coppering = `
+struct Board { x: vec4f, y: vec4f, z: vec4f, o: vec4f, heights: array<vec4f, 2> }  // its frame in the model, and each layer's height in it
+@group(1) @binding(0) var<uniform> board: Board;
+struct Laid { @builtin(position) position: vec4f, @location(0) w: vec2f, @location(1) @interpolate(flat) a: vec4f, @location(2) @interpolate(flat) b: vec4f,
+              @location(3) @interpolate(flat) col: vec4f, @location(4) world: vec3f }
+@vertex fn copper_vertex(@builtin(vertex_index) id: u32, @location(0) box: vec4f, @location(1) a: vec4f, @location(2) b: vec4f, @location(3) col: vec4f) -> Laid {
+  var cx = array<f32, 6>(0., 1., 0., 0., 1., 1.);
+  var cy = array<f32, 6>(0., 0., 1., 1., 0., 1.);
+  let room = 0.03;
+  let w = vec2f(mix(box.x - room, box.z + room, cx[id]), mix(box.y - room, box.w + room, cy[id]));
+  let layer = i32(b.w);
+  let world = board.o.xyz + board.x.xyz * w.x + board.y.xyz * w.y + board.z.xyz * board.heights[layer / 4][layer % 4];
+  return Laid(u.project * vec4f(world + normalize(u.eye.xyz - world) * 2.5 * u.depth.x, 1.0), w, a, b, col, world);
+}
+// how far inside a shape a point is (below zero): b.z says which shape
+fn inside(p: vec2f, a: vec4f, b: vec4f) -> f32 {
+  if (b.z < 0.5) {                       // a line from a.xy to a.zw, b.x half its width
+    let pa = p - a.xy; let ba = a.zw - a.xy; let l = dot(ba, ba);
+    var h = 0.;
+    if (l > 0.) { h = clamp(dot(pa, ba) / l, 0., 1.); }
+    return length(pa - ba * h) - b.x;
+  }
+  if (b.z < 1.5) {                       // a rectangle about a.xy, a.zw half its sides, b.x its corners, b.y its turn
+    let c = cos(b.y); let s = sin(b.y); let d = p - a.xy;
+    let q = vec2f(c * d.x + s * d.y, -s * d.x + c * d.y);
+    let e = abs(q) - (a.zw - vec2f(b.x));
+    return length(max(e, vec2f(0.))) + min(max(e.x, e.y), 0.) - b.x;
+  }
+  let q = p - a.xy;                      // an arc about a.xy of radius a.z, a.w half its width, from b.x through b.y
+  let turn = 6.283185307;
+  var t = atan2(q.y, q.x) - b.x;
+  t = t - turn * floor(t / turn);
+  if (t <= b.y) { return abs(length(q) - a.z) - a.w; }
+  let e1 = a.xy + a.z * vec2f(cos(b.x), sin(b.x));
+  let e2 = a.xy + a.z * vec2f(cos(b.x + b.y), sin(b.x + b.y));
+  return min(distance(p, e1), distance(p, e2)) - a.w;
+}
+@fragment fn copper_fragment(in: Laid) -> @location(0) vec4f {
+  // how much of the board a pixel is across, here: the place on the board changes by this from one pixel to the next
+  let across = max(length(vec2f(dpdx(in.w.x), dpdy(in.w.x))), length(vec2f(dpdx(in.w.y), dpdy(in.w.y))));
+  let full = clamp(0.5 - inside(in.w, in.a, in.b) / max(across, 1e-6), 0., 1.);
+  if (full <= 0. || beyond(in.world)) { discard; }
+  var colour = in.col.rgb;
+  // with faces not shown the board is as it is: copper, and a hole in it dark
+  if (u.chosen.w == 0 && in.col.a > -1.5) { colour = vec3f(0.82, 0.58, 0.26); }
+  return vec4f(colour, full);
+}
+`
+
 // ---- Drawing ----
 
 let device, context, format, bound, layout, uniforms, depth, model = null, timer = null
@@ -585,6 +654,21 @@ const plainly = () => plainly.made ??= device.createBindGroup({ layout: bound, e
 // vertices and corners on the graphics card. A mesh is asked for once.
 let mounted
 const meshes = new Map()
+// the copper's pipeline, and what a board's own numbers are bound through
+let coppered, onBoard
+// a cube from nothing to one along each axis, as a mesh: a part's body is one of it, its
+// three edges and its corner the instance's frame (the assets' pipeline draws it)
+const cube = () => cube.made ??= (() => {
+  const vertices = [], corners = []
+  for (const axis of [0, 1, 2]) for (const side of [0, 1]) {
+    const n = [0, 0, 0]; n[axis] = side ? 1 : -1
+    const first = vertices.length / 6, u = (axis + 1) % 3, v = (axis + 2) % 3
+    for (const [a, b] of [[0, 0], [1, 0], [1, 1], [0, 1]]) { const p = [0, 0, 0]; p[axis] = side; p[u] = a; p[v] = b; vertices.push(...p, ...n) }
+    corners.push(first, first + 1, first + 2, first, first + 2, first + 3)
+  }
+  const kept = (usage, data) => { const b = device.createBuffer({ size: data.byteLength, usage: usage | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, data); return b }
+  return { vertices: kept(GPUBufferUsage.VERTEX, new Float32Array(vertices)), corners: kept(GPUBufferUsage.INDEX, new Uint32Array(corners)), count: 36 }
+})()
 // what is drawn over the model, a line or a dot an instance: [pipeline hidden, pipeline in front], its buffer, how many
 const lines = { floats: 11, buffer: null, count: 0 }, dots = { floats: 8, buffer: null, count: 0 }
 
@@ -600,7 +684,7 @@ async function graphics() {
   bound = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} }] })
   layout = device.createPipelineLayout({ bindGroupLayouts: [bound] })
-  uniforms = device.createBuffer({ size: 288, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+  uniforms = device.createBuffer({ size: 416, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
   hits = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }] })
   relayed = device.createPipelineLayout({ bindGroupLayouts: [bound, hits] })
   const reads = device.createShaderModule({ code: shared + framing + reaching })
@@ -628,6 +712,14 @@ async function graphics() {
     layout, vertex: { module: assets, entryPoint: 'asset_vertex', buffers: [threes(0, 2, 'vertex'), threes(2, 5, 'instance')] }, fragment: { module: assets, entryPoint: 'asset_fragment', targets: [{ format }] },
     depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
   })
+  onBoard = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} }] })
+  const laid = device.createShaderModule({ code: shared + coppering })
+  coppered = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bound, onBoard] }),
+    vertex: { module: laid, entryPoint: 'copper_vertex', buffers: [{ stepMode: 'instance', arrayStride: 64, attributes: [0, 1, 2, 3].map(k => ({ shaderLocation: k, offset: 16 * k, format: 'float32x4' })) }] },
+    fragment: { module: laid, entryPoint: 'copper_fragment', targets: [{ format, blend }] },
+    depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'less-equal' },
+  })
   lines.pipelines = pipelines('line', [3, 3, 4, 1])
   dots.pipelines = pipelines('dot', [3, 4, 1])
   // how long the graphics card takes over a picture, where it will say
@@ -648,7 +740,7 @@ async function regained(lost) {
   if (losses > 1) { said = `The graphics card was lost to the page again${lostTo}. Load the page again.`; panel(); return }
   try {
     // nothing made with the card that was lost is of use to the new one
-    plainly.made = null; meshes.clear(); pipes.clear(); found = null; depth = null
+    plainly.made = null; cube.made = null; meshes.clear(); pipes.clear(); found = null; depth = null
     for (const kind of [lines, dots]) { kind.buffer = null; kind.count = 0 }
     await graphics()
     written = null; follow(); lay()
@@ -688,7 +780,7 @@ function sized() {
 
 // A model as the page holds it: what each way of drawing needs of it, made when that
 // way is first asked for.
-const held = (s, name, view) => ({ name, view, source: s.shader, large: s.shader.length > heavy, gates: s.gates, colours: s.features.filter(f => f.colour), compiled: null, regions: null, assets: [] })
+const held = (s, name) => ({ name, view: `&solo=${s.solo}&hide=${s.hidden.join(',')}`, off: new Uint32Array(32), source: s.shader, large: s.shader.length > heavy, gates: s.gates, colours: s.features.filter(f => f.colour), compiled: null, regions: null, assets: [], boards: [] })
 // A model's one shader is long to compile where it is long: a second or two for each
 // million characters, on one core. One longer than this is not compiled for marching
 // at all, while the model has regions: its first picture is by them (readied).
@@ -726,11 +818,54 @@ const meshed = id => {
 async function assembled(m, assets) {
   const by = new Map()
   for (const a of assets) if (a.mesh) by.set(a.mesh, [...(by.get(a.mesh) ?? []), ...a.x, ...a.y, ...a.z, ...a.o, ...(a.colour ?? [0.84, 0.79, 0.68])])
-  m.assets = await Promise.all([...by].map(async ([id, frames]) => {
+  const made = await Promise.all([...by].map(async ([id, frames]) => {
     const instances = device.createBuffer({ size: 4 * frames.length, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
     device.queue.writeBuffer(instances, 0, new Float32Array(frames))
     return { mesh: await meshed(id), instances, count: frames.length / 15 }
   }))
+  // in place of those it had, where what is shown of it changed
+  m.assets.forEach(a => a.instances.destroy())
+  m.assets = made
+}
+
+// A model's circuit boards, ready to draw: every piece of copper sixteen numbers (its
+// box, its shape, its layer, its colour and net: lib/circuit_page.ml), and the board's
+// frame with each layer's height in it. What goes through the board, a via or a hole,
+// is on every layer of it. A model whose boards cannot be had is drawn without them.
+async function boarded(m, name) {
+  try {
+    const answer = await fetch('/boards' + about(name))
+    if (answer.status == 404) { said = 'The page is served by an older mk52 than it is, which has no copper to give: mk52 stop, then mk52 open, in the design folder.'; status(); return }
+    if (!answer.ok) return
+    m.boards = (await answer.json()).map(b => {
+      const all = new Float32Array(Uint8Array.from(atob(b.instances), c => c.charCodeAt(0)).buffer), layers = b.layers.length
+      // a hole of a millimetre or more is cut in the board itself (Circuit.Board.solid), and is not drawn over it
+      const cut = i => all[i + 15] == -2 && all[i + 8] >= 0.5
+      let count = 0
+      for (let i = 0; i < all.length; i += 16) if (!cut(i)) count += all[i + 11] < 0 ? layers : 1
+      const pieces = new Float32Array(16 * count)
+      let at = 0
+      for (let i = 0; i < all.length; i += 16) {
+        if (cut(i)) continue
+        const piece = all.subarray(i, i + 16)
+        for (const layer of piece[11] < 0 ? b.layers.keys() : [piece[11]]) { pieces.set(piece, at); pieces[at + 11] = layer; at += 16 }
+      }
+      const instances = device.createBuffer({ size: Math.max(64, pieces.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
+      device.queue.writeBuffer(instances, 0, pieces)
+      // the front's copper on the front face, the back's on the back, the others evenly between
+      const heights = Array.from({ length: 8 }, (_, l) => (layers > 1 && l < layers ? -b.thickness * l / (layers - 1) : 0))
+      const frame = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+      device.queue.writeBuffer(frame, 0, new Float32Array([...b.x, 0, ...b.y, 0, ...b.z, 0, ...b.o, 0, ...heights]))
+      // the parts' bodies: each box's edges and corner from the board's frame into the model's
+      const boxes = b.bodies ? new Float32Array(Uint8Array.from(atob(b.bodies), c => c.charCodeAt(0)).buffer) : new Float32Array(0)
+      const turned = (i, o) => [0, 1, 2].map(k => b.x[k] * boxes[i] + b.y[k] * boxes[i + 1] + b.z[k] * boxes[i + 2] + (o ? b.o[k] : 0))
+      const placed = new Float32Array(boxes.length)
+      for (let i = 0; i < boxes.length; i += 15) placed.set([...turned(i), ...turned(i + 3), ...turned(i + 6), ...turned(i + 9, true), ...boxes.subarray(i + 12, i + 15)], i)
+      const bodies = device.createBuffer({ size: Math.max(60, placed.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
+      device.queue.writeBuffer(bodies, 0, placed)
+      return { name: b.name, instances, frame, count, bodies, parts: placed.length / 15, group: device.createBindGroup({ layout: onBoard, entries: [{ binding: 0, resource: { buffer: frame } }] }) }
+    })
+  } catch { m.boards = [] }
 }
 
 // For drawing by regions: the kernel's cut of the model (lib/region.ml), each shader of
@@ -760,9 +895,16 @@ const regioned = m => m.cutting ??= (async () => {
   }
   // of the pipelines kept, the longest unused go
   while (pipes.size > spare) pipes.delete(pipes.keys().next().value)
-  // the regions' boxes, and after them the cells that are solid all through
-  const cells = new Float32Array(made.solid ?? [])
-  r.solid = cells.length / 6
+  // the regions' boxes, and after them the cells that are solid all through: seven numbers
+  // each, the last the body it is inside, and a body's cells one after another
+  const inside = c => made.solid[7 * c + 6], solid = Array.from({ length: made.solid.length / 7 }, (_, c) => c).sort((a, b) => inside(a) - inside(b))
+  const cells = new Float32Array(6 * solid.length)
+  r.solid = []
+  solid.forEach((c, i) => {
+    cells.set(made.solid.slice(7 * c, 7 * c + 6), 6 * i)
+    if (r.solid[r.solid.length - 1]?.body == inside(c)) r.solid[r.solid.length - 1].count++
+    else r.solid.push({ body: inside(c), first: count + i, count: 1 })
+  })
   r.buffer = device.createBuffer({ size: Math.max(24, boxes.byteLength + cells.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
   device.queue.writeBuffer(r.buffer, 0, boxes)
   device.queue.writeBuffer(r.buffer, boxes.byteLength, cells)
@@ -797,10 +939,13 @@ const boxed = module => ({
 })
 
 // Every region's box, each through its shader's pipeline; and with a cut, the solid
-// cells' boxes, for the solid cut open.
-function boxes(pass, r) {
+// cells' boxes, for the solid cut open: those of the bodies that are not switched [off].
+function boxes(pass, r, off) {
   pass.setVertexBuffer(0, r.buffer)
-  if (section.on && r.solid) { pass.setPipeline(solid); pass.draw(36, r.solid, 0, r.count) }
+  if (section.on && r.solid.length) {
+    pass.setPipeline(solid)
+    for (const run of r.solid) if (!(off[run.body >> 5] >>> (run.body & 31) & 1)) pass.draw(36, run.count, 0, run.first)
+  }
   for (const run of r.runs) { pass.setPipeline(r.drawn[run.shader]); pass.draw(36, run.count, 0, run.first) }
 }
 
@@ -864,7 +1009,7 @@ const marched = m => m.marching ??= compiled(m).then(async () => {
 // What a compiled shader is given: the uniforms, the table of its gates, its colours.
 const given = c => c.given ??= device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer: uniforms } }, { binding: 1, resource: c.texture.createView() }, { binding: 2, resource: c.paint.createView() }] })
 
-function dropped(m) { if (m) m.gone = true; m?.assets.forEach(a => a.instances.destroy()); m?.regions?.buffer.destroy(); m?.compiled?.texture.destroy(); m?.compiled?.paint.destroy() }
+function dropped(m) { if (m) m.gone = true; m?.assets.forEach(a => a.instances.destroy()); m?.boards.forEach(b => { b.instances.destroy(); b.frame.destroy(); b.bodies.destroy() }); m?.regions?.buffer.destroy(); m?.compiled?.texture.destroy(); m?.compiled?.paint.destroy() }
 
 // Where the cut is along its axis: where it was put, kept inside the model's box.
 const cutAt = () => { const lo = scene.lo[section.axis], hi = scene.hi[section.axis]; return Math.min(hi, Math.max(lo, section.at ?? 0.5 * (lo + hi))) }
@@ -877,14 +1022,15 @@ function plane() {
   return [...normal, side * cutAt()]
 }
 
-// The uniforms for a picture w by h of the model in front.
-function uniformed(w, h, back) {
-  const p = placed(), f = new Float32Array(72), n = new Int32Array(f.buffer), grid = scene.gates
+// The uniforms for a picture w by h of the model in front, with the bodies [off] switched off.
+function uniformed(w, h, back, off) {
+  const p = placed(), f = new Float32Array(104), n = new Int32Array(f.buffer), grid = scene.gates
   f.set(p.eye, 0); f.set(p.forward, 4); f.set(p.right, 8); f.set(p.up, 12)
   f.set(scene.lo, 16); f.set(scene.hi, 20); f.set(back, 24); f.set([...grid.lo, grid.cell], 28)
   f.set([w, h, tanHalf, scene.step], 32); f.set([p.diagonal * 2e-4, p.near, p.far], 36)
   n.set(grid.cells, 40); n.set([feature, last(feature), face, +faces], 44)
-  f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, density()], 64); f.set(plane(), 68)
+  f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, density(), +off.some(Boolean)], 64); f.set(plane(), 68)
+  new Uint32Array(f.buffer).set(off, 72)
   return f
 }
 
@@ -911,7 +1057,10 @@ function draw() {
   const timing = timer && !timer.reading && ready
   const whole = sharp == 1
   const encoder = device.createCommandEncoder()
-  if (ready) device.queue.writeBuffer(uniforms, 0, uniformed(w, h, back))
+  // what is switched off is what the view asks, where the model in front can show that;
+  // where it cannot, a model that can is on its way, and this one stays as it was
+  if (ready) model.off = switched() ?? model.off
+  if (ready) device.queue.writeBuffer(uniforms, 0, uniformed(w, h, back, model.off))
   // by regions the picture is two passes: the regions find each pixel's hit, then the compiled shader gives it its face
   const finding = ready && r
   if (finding) {
@@ -925,7 +1074,7 @@ function draw() {
       depthStencilAttachment: { view: depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
       ...(timing ? { timestampWrites: { querySet: timer.queries, beginningOfPassWriteIndex: 0 } } : {}),
     })
-    first.setBindGroup(0, plainly()); boxes(first, r); first.end()
+    first.setBindGroup(0, plainly()); boxes(first, r, model.off); first.end()
   }
   const pass = encoder.beginRenderPass({
     colorAttachments: [{ view: context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [...back, 1] }],
@@ -940,6 +1089,17 @@ function draw() {
       pass.setPipeline(mounted)
       pass.setVertexBuffer(0, a.mesh.vertices); pass.setVertexBuffer(1, a.instances); pass.setIndexBuffer(a.mesh.corners, 'uint32')
       pass.drawIndexed(a.mesh.count, a.count)
+    }
+    // the parts on the boards, each a box: before the copper, which is under them
+    if (show.assets) for (const b of model.boards) if (b.parts) {
+      const box = cube()
+      pass.setPipeline(mounted)
+      pass.setVertexBuffer(0, box.vertices); pass.setVertexBuffer(1, b.bodies); pass.setIndexBuffer(box.corners, 'uint32')
+      pass.drawIndexed(box.count, b.parts)
+    }
+    if (show.copper) for (const b of model.boards) {
+      pass.setPipeline(coppered); pass.setBindGroup(1, b.group); pass.setVertexBuffer(0, b.instances)
+      pass.draw(6, b.count)
     }
     for (const hidden of [0, 1]) for (const kind of [lines, dots]) if (kind.count) {
       pass.setPipeline(kind.pipelines[hidden])
@@ -1013,11 +1173,37 @@ const about = (name, more = '') => `?name=${encodeURIComponent(name)}${more}`
 // What of the model in front is shown, as the server is asked for it: a feature alone (or
 // the whole), without the features taken out.
 const viewed = () => `&solo=${solo}&hide=${[...hidden].sort((a, b) => a - b).join(',')}`
+// The feature each feature of a scene was made in.
+const parents = s => s.parents ??= new Map(s.features.map(f => [f.id, f.parent]))
 // Whether a feature is out of what is shown: taken out, or made inside one that is (and
 // not inside the one shown alone).
-function gone(id) {
-  for (let f = id; f && f != solo; f = scene?.features.find(x => x.id == f)?.parent ?? 0) if (hidden.has(f)) return true
+function gone(id, s = scene) {
+  for (let f = id; f && f != solo; f = parents(s).get(f) ?? 0) if (hidden.has(f)) return true
   return false
+}
+
+// The model's bodies (lib/joined.ml), what its unions join, are each read through a
+// switch in its shaders. So a feature that is a body, or holds only whole bodies, is
+// taken out of the picture and put back by those switches, at once; and is shown alone
+// by the others' being switched off. The kernel is asked for a new model only where a
+// feature is taken out from inside a body, a cut that no longer cuts, or one is shown
+// alone that is not made of the model's bodies.
+//
+// The bodies switched off to show what is to be shown, a bit each as the shaders read
+// them. Null where scene [s] cannot show that by its switches: it is of another feature
+// alone, or without a feature now put back, or a body would be other than it is.
+function switched(s = scene) {
+  if (!s || !s.hidden.every(f => hidden.has(f))) return null
+  // a feature alone, in a scene of the whole model: the bodies it is, each with the ways down to it
+  const alone = s.solo == solo ? null : new Map(s.solo == 0 ? s.features.find(f => f.id == solo)?.alone : null)
+  if (alone && !alone.size) return null
+  const off = new Uint32Array(32), out = f => gone(f, s)
+  for (const [b, body] of s.bodies.entries()) {
+    const over = alone ? alone.get(b) : body.over
+    if (!over || over.every(way => way.some(out))) off[b >> 5] |= 1 << (b & 31)
+    else if (body.inside.some(out)) return null
+  }
+  return off
 }
 
 // A command run for the person: what it says when it fails is shown.
@@ -1052,10 +1238,12 @@ async function look() {
   setTimeout(look, 400)
 }
 
-// The model in front is taken up again whenever the command has written it anew.
+// The model in front is taken up again whenever the command has written it anew: as the
+// kernel was asked for the one there is, where that one shows by its switches what is
+// shown, so that the new one can too.
 function follow() {
   const now = folder.open.find(o => o.name == current)?.written ?? null
-  if (now != written) { written = now; if (current) take(current, viewed()) }
+  if (now != written) { written = now; if (current) take(current, scene?.name == current && switched() ? model.view : viewed()) }
 }
 
 // A model in front: nothing picked out in it yet, and its whole shown.
@@ -1077,26 +1265,29 @@ function keys(features) {
   return key
 }
 
-// Whether something of feature [id] (an asset, a sketch) is out of what scene [s] shows:
-// inside a feature taken out, or outside the one shown alone.
+// Whether something of feature [id] of scene [s] (an asset, a sketch) is out of what is
+// shown: inside a feature taken out, or outside the one shown alone.
 function outOf(s, id) {
-  const parent = new Map(s.features.map(f => [f.id, f.parent]))
-  for (let f = id; f; f = parent.get(f) ?? 0) {
-    if (f == s.solo) return false
-    if (s.hidden.includes(f)) return true
+  for (let f = id; f; f = parents(s).get(f) ?? 0) {
+    if (f == solo) return false
+    if (hidden.has(f)) return true
   }
-  return s.solo != 0
+  return solo != 0
 }
+// A model's assets, of those of its scene: the ones that are in what is shown.
+const mounting = (m, s) => assembled(m, s.assets.filter(a => !outOf(s, a.feature)))
 
 // The model as the command last wrote it, asked of the kernel and made ready to draw.
 // What was asked meanwhile replaces it, before its shader is made. When the model was
-// built again, what is alone, taken out and picked out is found again by its key, and
-// asked for again if the numbers moved.
+// built again, what is alone, taken out and picked out is found again by its key. The
+// kernel is asked again where what it gave cannot show what is now to be shown
+// (switched): the numbers moved, or the person changed it meanwhile.
 let viewing = 0
 // [basis]: the features the numbers in [view] are of.
 async function take(name, view, basis = scene?.name == name ? scene.features : null) {
   const mine = ++taking
-  const stale = () => mine != taking || current != name || viewed() != view
+  const stale = () => mine != taking || current != name
+  const again = s => !switched(s) && viewed() != view
   const before = basis && keys(basis)
   viewing++; status()
   try {
@@ -1106,17 +1297,15 @@ async function take(name, view, basis = scene?.name == name ? scene.features : n
     const s = await r.json()
     if (stale()) return
     if (before) {
-      const now = new Map([...keys(s.features)].map(([id, key]) => [key, id])), again = id => now.get(before.get(id)) ?? 0
-      const moved = { solo: solo && again(solo), hidden: new Set([...hidden].map(again).filter(Boolean)), feature: feature && again(feature) }
-      const was = viewed()
-      solo = moved.solo; hidden = moved.hidden; feature = moved.feature
-      if (viewed() != was) return take(name, viewed(), s.features)
+      const now = new Map([...keys(s.features)].map(([id, key]) => [key, id])), anew = id => now.get(before.get(id)) ?? 0
+      solo = solo && anew(solo); hidden = new Set([...hidden].map(anew).filter(Boolean)); feature = feature && anew(feature)
     }
+    if (again(s)) return take(name, viewed(), s.features)
     const found = await (await fetch('/edges' + about(name))).json()
     if (stale()) return
-    const ready = held(s, name, view)
+    const ready = held(s, name)
     coming = ready
-    await Promise.all([readied(ready), assembled(ready, s.assets.filter(a => !outOf(s, a.feature)))])
+    await Promise.all([readied(ready), mounting(ready, s), s.boards ? boarded(ready, name) : null])
     // a later one was asked for meanwhile, or the person moved on
     if (stale()) { dropped(ready); return }
     dropped(model)
@@ -1127,17 +1316,20 @@ async function take(name, view, basis = scene?.name == name ? scene.features : n
     face = -1
     if (!fitted.has(name)) { fitted.add(name); fit() }
     lay(); panel(); changed()
+    if (again(s)) take(name, viewed())
   } catch (e) { if (mine == taking && current == name) { said = e.message; status() } }
   finally { if (mine == taking) coming = null; viewing--; status() }
 }
 
-// What is shown changed by the person: asked for a moment later, so that quick clicks on
-// the switches make one request, not one each.
+// What is shown changed by the person. Where the model in front shows it by its
+// switches, it does at once. Otherwise the kernel is asked, a moment later, so that
+// quick clicks make one request, not one each.
 let retaking = 0
-function retake() {
+function reshown() {
   clearTimeout(retaking)
-  const name = current
-  retaking = setTimeout(() => { if (current == name) take(name, viewed()) }, 180)
+  const name = current, m = model
+  if (switched()) mounting(m, scene).then(() => { if (m == model) redraw() })
+  else retaking = setTimeout(() => { if (current == name) take(name, viewed()) }, 180)
 }
 
 // A feature shown alone, or with 0 the whole model again. A feature taken out is put back
@@ -1145,7 +1337,7 @@ function retake() {
 function alone(f) {
   if (!current || f == solo) return
   solo = f; hidden.delete(f)
-  retake()
+  reshown()
   panel()
 }
 
@@ -1156,7 +1348,7 @@ function shown(f) {
   else if (!hidden.delete(f)) hidden.add(f)
   if (gone(feature)) { feature = 0; face = -1 }
   picked = null
-  retake()
+  reshown()
   lay(); panel(); changed()
 }
 
@@ -1353,7 +1545,7 @@ function status() {
 }
 
 for (const section of document.querySelectorAll('.panel')) section.querySelector('.head').onclick = e => e.currentTarget.setAttribute('aria-expanded', section.classList.toggle('open'))
-for (const what of ['edges', 'sketches', 'frames', 'assets']) {
+for (const what of ['edges', 'sketches', 'frames', 'assets', 'copper']) {
   const button = $('show' + what[0].toUpperCase() + what.slice(1))
   button.onclick = () => { show[what] = !show[what]; button.setAttribute('aria-pressed', show[what]); lay() }
 }

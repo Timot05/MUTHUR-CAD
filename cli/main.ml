@@ -24,6 +24,18 @@
      mk52 mesh <model> [cells] [raw] the same in cells all of one size (32 to 256 across
                                      it: 64 unless said) and its triangles even (raw: as
                                      marched, not made even)
+     mk52 board <model> [...]        the circuit board a model builds (lib/circuit.ml): its
+                                     copper held against its nets and its edge (shorts,
+                                     two nets too near, copper too near the edge, nets
+                                     left in pieces; check all for every one found,
+                                     check fields to ask every pair from its two fields
+                                     and not from its shape's numbers); picture [front|back|inner1|all] for a PNG
+                                     of it, each net a colour; view for a page that
+                                     draws it with the graphics card, to move about in.
+                                     The model's own page (mk52 view) shows the copper
+                                     too, on the board where it is in the model
+     mk52 footprint <file> ...       footprint files (.kicad_mod) as OCaml, printed: read
+                                     once, and code in the project from then on
      mk52 outline <model> [out=]     the outline of a flat part, a board's: the edges round
                                      its top, holes too, as the lines, arcs and circles
                                      they are, in a DXF file in mm whose path is printed
@@ -284,6 +296,8 @@ let () =
         print_endline text;
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
     | [ "skins"; name ] -> print_endline (Project.skins (Project.model name))
+    | "board" :: name :: words -> Circuits.run name words
+    | "footprint" :: files -> Circuits.footprints files
     | "clash" :: name :: options ->
         let limit = List.find_map (fun o -> if String.length o > 4 && String.sub o 0 4 = "gap=" then Some (match float_of_string_opt (String.sub o 4 (String.length o - 4)) with Some v when v >= 0. -> v | _ -> failwith "gap is a length, as gap=0.3") else None) options in
         let against = match List.filter (fun o -> not (String.contains o '=')) options with [] -> None | [ other ] -> Some (Project.model other) | _ -> failwith "after the model: another model to hold it against, and gap=0.3" in

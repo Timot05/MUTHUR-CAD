@@ -165,6 +165,7 @@ let answer port r =
       let id = param "id" in
       if id = "" || not (String.for_all (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false) id) then refuse "400 Bad Request" "not an asset's number";
       ("application/octet-stream", file (Place.asset id))
+  | "GET", "/boards" -> asked [ "board"; name (); "scene" ]
   | "GET", "/edges" -> (json, try read (Place.edges (name ())) with Sys_error _ -> "null")
   | "GET", "/pick" ->
       let numbers k n = let v = String.split_on_char ',' (param k) in if List.length v <> n || List.exists (fun x -> float_of_string_opt x = None) v then refuse "400 Bad Request" (Printf.sprintf "%s is %d numbers" k n) else v in

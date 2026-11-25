@@ -28,6 +28,14 @@
    nothing and is skipped. A decision is the kernel's own bound, the one the edges and
    the mesh are found with, so the field is the same field.
 
+   Bodies. A union that joins the model's bodies (Joined) is a link like any other, but
+   reads a side that is a body through that body's switch, so that the page takes a body
+   out of the picture without a new shader. The table is made to hold for that: a gate
+   between bodies is skipped only where what it holds is outside all over the cell. With
+   a body switched off the field may then be further from zero than the model's without
+   it, though never of another sign: the page keeps a step of its march inside the cell
+   it starts in while anything is switched off.
+
    A gate is not smaller than [least] operations. A GPU runs a skipped block for nearly
    nothing only when the block is large: measured on an Apple M1, skipping costs 45% of
    running a block of 30 operations, 7% of one of 120 and 2% of one of 240. *)
@@ -52,7 +60,8 @@ let lit v =
     let s = if String.contains s '.' || String.contains s 'e' then s else s ^ ".0" in
     if v < 0. then "(" ^ s ^ ")" else s
 
-let model ?(least = 240) (p : P.t) root =
+let model ?(least = 240) (p : P.t) (f : Joined.found) =
+  let root = p.root in
   let b = Buffer.create 4096 in
   let scopes = ref [ Hashtbl.create 64 ] and pad = ref "  " in
   let known n = List.exists (fun h -> Hashtbl.mem h n) !scopes and know n = Hashtbl.replace (List.hd !scopes) n () in
@@ -107,6 +116,9 @@ let model ?(least = 240) (p : P.t) root =
   (* A link of a chain: a select whose guard reads both its sides, through arithmetic alone. *)
   let rec reads g m = g = m || (p.kind.(g) = 1 && Array.exists (fun i -> reads i m) p.inputs.(g)) in
   let link n = p.kind.(n) = 2 && reads p.inputs.(n).(0) p.inputs.(n).(1) && reads p.inputs.(n).(0) p.inputs.(n).(2) in
+  (* A node as a union that joins bodies takes it: a body through its switch. *)
+  let off n = match f.of_node.(n) with -1 -> None | b -> Some (Joined.switch b) in
+  let taken n = match off n with None -> reg p.last.(n) | Some switch -> Printf.sprintf "select(%s, %s, %s)" (reg p.last.(n)) (lit Joined.far) switch in
   (* A made face's number, mixed from its inputs': its low 16 bits, kept at every step,
      so that nothing overflows (WGSL refuses a constant that does). *)
   let made n = Array.fold_left (fun acc i -> Printf.sprintf "((%s * 31 + %s) & 65535)" acc (face i)) (string_of_int ((7919 + n) land 65535)) p.inputs.(n) in
@@ -137,13 +149,14 @@ let model ?(least = 240) (p : P.t) root =
           block "else" (side 2));
       know n
     end
-  (* The chain a link is the top of: down its heavier side while that is a link too. *)
+  (* The chain a link is the top of: down its heavier side while that is a link too, and
+     not a body whole, which the union above reads through its switch. *)
   and chain top =
     let rec down n links =
       let ins = p.inputs.(n) in
       let so_far = if weight.(ins.(1)) >= weight.(ins.(2)) then 1 else 2 in
       let links = (n, so_far) :: links and below = ins.(so_far) in
-      if link below && not (known below) then down below links else (below, links)
+      if link below && (not (known below)) && not (Joined.joins f n && f.of_node.(below) >= 0) then down below links else (below, links)
     in
     let bottom, links = down top [] in
     (* cut into gates from the bottom, each at least [least] operations; what is left over
@@ -156,7 +169,9 @@ let model ?(least = 240) (p : P.t) root =
     let stretches = match List.rev (cut [] 0 links) with (last, size) :: (before, s) :: rest when size < least -> List.rev ((before @ last, s + size) :: rest) | all -> List.rev all in
     node bottom;
     let c = Printf.sprintf "c%d" top in
-    line "var %s: f32 = %s; var %sf: i32 = %s; var %sq: i32 = %s;" c (reg p.last.(bottom)) c (face bottom) c (feat bottom);
+    (* the lowest link reads the bottom: as a body, where it joins bodies *)
+    let lowest = fst (List.hd links) in
+    line "var %s: f32 = %s; var %sf: i32 = %s; var %sq: i32 = %s;" c (if Joined.joins f lowest then taken bottom else reg p.last.(bottom)) c (face bottom) c (feat bottom);
     let one (n, so_far) =
       let ins = p.inputs.(n) in
       let below = ins.(so_far) and part = ins.(3 - so_far) in
@@ -166,8 +181,13 @@ let model ?(least = 240) (p : P.t) root =
         line "let r%d = %s; let fc%d = %sf; let q%d = %sq;" p.last.(below) c below c below c;
         know below
       end;
-      node ins.(0);
-      line "if (%s(%s <= 0.0)) { %s = %s; %sf = %s; %sq = %s; }" (if so_far = 1 then "!" else "") (reg p.last.(ins.(0))) c (reg p.last.(part)) c (face part) c (feat part)
+      let takes =
+        if Joined.joins f n then
+          (* the lesser of the two, as the guard would choose where they are the same; the part not at all where it is switched off *)
+          Printf.sprintf "%s%s %s %s" (match off part with Some switch -> Printf.sprintf "!(%s) && " switch | None -> "") (reg p.last.(part)) (if so_far = 1 then "<" else "<=") c
+        else (node ins.(0); Printf.sprintf "%s(%s <= 0.0)" (if so_far = 1 then "!" else "") (reg p.last.(ins.(0))))
+      in
+      line "if (%s) { %s = %s; %sf = %s; %sq = %s; }" takes c (reg p.last.(part)) c (face part) c (feat part)
     in
     List.iter
       (fun (stretch, size) ->
@@ -194,7 +214,7 @@ let model ?(least = 240) (p : P.t) root =
        }\n"
       words
       (String.concat "" (List.init words (fun w -> Printf.sprintf "  let g%d = textureLoad(gates, vec2u((row + %du) %% %du, (row + %du) / %du), 0);\n" w w width w width)))
-      (Buffer.contents b) (face root) (feat root) (reg p.last.(root))
+      (Buffer.contents b) (face root) (feat root) (taken root)
   in
   { text; gates = Array.of_list (List.map snd (List.sort compare !gates)) }
 
@@ -213,13 +233,14 @@ let entered links state = List.exists (fun (n, so_far) -> Char.code (Bytes.get s
 
 (* Which gates are entered in every cell of a grid over lo..hi, laid out as the shader
    reads them. A decision holds a little beyond its cell too: the shader finds a point's
-   cell in 32-bit arithmetic, and takes a normal from points just off the surface. *)
-let decisions ?(depth = 5) (p : P.t) c (s : shader) ~lo ~hi =
+   cell in 32-bit arithmetic, and takes a normal from points just off the surface. It
+   holds whatever bodies are switched off. *)
+let decisions ?(depth = 5) (p : P.t) (f : Joined.found) c (s : shader) ~lo ~hi =
   let side = Array.fold_left Float.max 0. (Array.map2 ( -. ) hi lo) and words = texels (Array.length s.gates) in
   let cell = side /. float (1 lsl depth) in
   let cells = Array.map2 (fun l h -> max 1 (int_of_float (Float.ceil (((h -. l) /. cell) -. 1e-9)))) lo hi in
   let table = Bytes.make (16 * width * (((cells.(0) * cells.(1) * cells.(2) * words) + width - 1) / width)) '\000' and row = Bytes.create (16 * words) in
-  Octree.cells ~pad:(1e-3 *. side) p c ~lo ~hi ~depth (fun l size state _ ->
+  Octree.cells ~pad:(1e-3 *. side) ~joins:f.joins p c ~lo ~hi ~depth (fun l size state _ ->
       Bytes.fill row 0 (Bytes.length row) '\000';
       Array.iteri (fun g links -> if entered links state then Bytes.set_int32_le row (4 * (g / 32)) (Int32.logor (Bytes.get_int32_le row (4 * (g / 32))) (Int32.shift_left 1l (g mod 32)))) s.gates;
       (* a cell the pruning stopped at early stands for every cell of the grid in it *)

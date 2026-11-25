@@ -7,6 +7,7 @@
 #   interfaces/           what the builder checks that code against: the kernel's
 #                         compiled interfaces, and the standard library's
 #   web/view.html         the page
+#   web/board.html        the page a circuit board is looked at in
 #   lib/, models/         the kernel's code and a worked example, to read: a design
 #                         folder reaches them through its link mk52
 #
@@ -24,7 +25,7 @@ cp _build/default/embed/embed.bc.exe "$out/bin/mk52-build"
 chmod 755 "$out/bin/mk52" "$out/bin/mk52-build"
 cp _build/default/lib/.mk52.objs/byte/*.cmi "$out/interfaces/kernel/"
 cp "$(ocamlc -where)"/*.cmi "$out/interfaces/ocaml/"
-cp web/view.html "$out/web/"
+cp web/view.html web/board.html "$out/web/"
 cp lib/*.ml "$out/lib/"
 cp models/bracket.ml "$out/models/"
 mkdir -p "$out/docs"

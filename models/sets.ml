@@ -14,10 +14,11 @@ let find name =
   match (List.assoc_opt name skins, List.find_opt (fun (c : Tricky.case) -> c.name = name) Tricky.cases) with
   | Some s, _ -> (s.lo, s.hi, fun () -> Skins.solid s (List.nth s.cells 1))
   | None, Some c -> (c.lo, c.hi, c.graph)
+  | None, None when List.mem_assoc name Boards.all -> (Boards.lo, Boards.hi, List.assoc name Boards.all)
   | None, None when name = "arm" -> (Arm.lo, Arm.hi, Arm.graph)
   | None, None when name = "bracket" -> (Bracket.lo, Bracket.hi, Bracket.graph)
   | None, None ->
       let set = List.find (fun s -> List.exists (fun (n, _, _) -> n = name) s.expected) all in
       (set.lo, set.hi, fun () -> set.graph name)
 
-let names = List.concat_map (fun s -> List.map (fun (n, _, _) -> n) s.expected) all @ List.map fst skins @ [ "arm"; "bracket" ] @ List.map (fun (c : Tricky.case) -> c.name) Tricky.cases
+let names = List.concat_map (fun s -> List.map (fun (n, _, _) -> n) s.expected) all @ List.map fst skins @ [ "arm"; "bracket" ] @ List.map fst Boards.all @ List.map (fun (c : Tricky.case) -> c.name) Tricky.cases

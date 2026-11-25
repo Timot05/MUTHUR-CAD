@@ -47,26 +47,32 @@ let numbered_above (graph : Graph.t) =
   in
   go graph
 
-(* The graph without the features [hidden]: where a node of one of them (or of a feature
-   made inside one) is first reached, it is nothing, a field far outside everything, and
-   what is above it is made again over that. A union then has one part fewer, a cut does
-   not cut, and a body cut into is gone with its cuts. A feature shown alone is shown
-   though one around it is taken out. *)
+(* Whether a feature is gone from what is shown without the features [hidden]: one of
+   them, or made inside one. A feature shown alone is shown though one around it is
+   taken out. *)
+let gone (m : Emit.t) ~solo hidden =
+  let parent f = match List.find_opt (fun (x : Graph.feature) -> x.fid = f) m.built.features with Some x -> x.parent | None -> 0 in
+  let memo = Hashtbl.create 64 in
+  let rec gone f =
+    match Hashtbl.find_opt memo f with
+    | Some v -> v
+    | None ->
+        let v = f <> 0 && f <> solo && (List.mem f hidden || gone (parent f)) in
+        Hashtbl.replace memo f v;
+        v
+  in
+  gone
+
+(* The graph without the features [hidden]: where a node of one that is gone is first
+   reached, it is nothing, a field far outside everything, and what is above it is made
+   again over that. A union then has one part fewer, a cut does not cut, and a body cut
+   into is gone with its cuts. *)
 let without (m : Emit.t) ~solo hidden (graph : Graph.t) =
   if hidden = [] then graph
   else begin
     numbered_above m.built.graph;
-    let parent f = match List.find_opt (fun (x : Graph.feature) -> x.fid = f) m.built.features with Some x -> x.parent | None -> 0 in
-    let gone_memo = Hashtbl.create 64 in
-    let rec gone f =
-      match Hashtbl.find_opt gone_memo f with
-      | Some v -> v
-      | None ->
-          let v = f <> 0 && f <> solo && (List.mem f hidden || gone (parent f)) in
-          Hashtbl.replace gone_memo f v;
-          v
-    in
-    let nothing = Graph.raw_piece "" (Expr.const 1e4) in
+    let gone = gone m ~solo hidden in
+    let nothing = Graph.raw_piece "" (Expr.const Joined.far) in
     let memo = Hashtbl.create 256 in
     let rec go (g : Graph.t) =
       match Hashtbl.find_opt memo g.id with
@@ -96,6 +102,19 @@ let shown name view =
   let graph = if view.solo = 0 then m.built.graph else match List.find_opt (fun (f : Graph.feature) -> f.fid = view.solo) m.built.features with Some { result = Some g; _ } -> g | _ -> failwith "no such feature" in
   (m, without m ~solo:view.solo view.hidden graph)
 
+(* A view as the page draws it: the model, the graph, its program and its bodies. The
+   page takes a body out of the picture by a switch (Joined), so a feature is taken out of
+   the graph here only where that is not all there is to it: where, taken out alone, it
+   leaves a body other than it was. The view comes back with those features alone
+   hidden; the page switches off the bodies the rest take out. *)
+let drawn name view =
+  let m, graph = shown name { view with hidden = [] } in
+  let compiled graph = let p = Prog.compile graph in (graph, p, Joined.find p) in
+  let whole = compiled graph in
+  let _, _, bodies = whole in
+  let kernel = List.filter (fun h -> not (Joined.plain bodies (gone m ~solo:view.solo [ h ]))) view.hidden in
+  (m, { view with hidden = kernel }, if kernel = [] then whole else compiled (without m ~solo:view.solo kernel graph))
+
 (* The features with a node in the graph, and their parents, in the order of the code. *)
 let features_of (m : Emit.t) =
   let seen = Hashtbl.create 64 and ids = Hashtbl.create 16 in
@@ -115,9 +134,10 @@ let colour = function Some (r, g, b) -> Json.Arr [ num r; num g; num b ] | None 
 let coloured (m : Emit.t) = Emit.coloured m.built.features
 
 (* A feature: where it is defined, whether it is a group, the frame it sits in if it has
-   one (its origin and three axes, in the world), its colour if it has one, and the faces
-   it made with the numbers the shader gives them. *)
-let feature ?(faces = []) ?paint (f : Graph.feature) =
+   one (its origin and three axes, in the world), its colour if it has one, the bodies it
+   is alone where it is made of the model's bodies (Joined.alone), and the faces it made
+   with the numbers the shader gives them. *)
+let feature ?(faces = []) ?paint ?alone (f : Graph.feature) =
   let frame =
     match f.frame with
     | None -> Json.Null
@@ -125,6 +145,7 @@ let feature ?(faces = []) ?paint (f : Graph.feature) =
   in
   Json.Obj
     [ ("id", int f.fid); ("name", Json.Str f.fname); ("path", Json.Str f.path); ("file", Json.Str f.file); ("line", int f.line); ("parent", int f.parent); ("group", Json.Bool f.group); ("frame", frame); ("colour", colour paint);
+      ("alone", match alone with Some bodies -> Json.Arr (List.map (fun (b, ways) -> Json.Arr [ int b; Json.Arr (List.map (fun way -> Json.Arr (List.map int way)) ways) ]) bodies) | None -> Json.Null);
       ("faces", Json.Arr (List.map (fun (name, id) -> Json.Obj [ ("name", Json.Str name); ("id", int id) ]) faces)) ]
 
 (* Each feature's own faces: the pieces it made, by the name within the feature. *)
@@ -181,20 +202,24 @@ let asset (a : Asset.placed) =
 
 (* How the page draws the model: its box, its features and its sketches, and the model
    itself as a shader of its own, with where that shader's gates are entered (Shader): a
-   file of 32-bit words, little-endian, which the page asks the server for. *)
+   file of 32-bit words, little-endian, which the page asks the server for. [hidden]:
+   the features taken out of the model itself, of those the view hides ([drawn]); and
+   its bodies, each with the features that take it out whole and those inside it, for
+   the page to tell what else it switches off. *)
 let scene name view =
-  let m, graph = shown name view in
-  let p = Prog.compile graph in
-  let s = Shader.model p p.root in
-  let g = Shader.decisions p (Prog.ctx p) s ~lo:m.lo ~hi:m.hi in
+  let m, view, (graph, p, bodies) = drawn name view in
+  let s = Shader.model p bodies in
+  let g = Shader.decisions p bodies (Prog.ctx p) s ~lo:m.lo ~hi:m.hi in
   Out_channel.with_open_bin (gates name view) (fun oc -> output_bytes oc g.table);
   let faces = faces_of m p graph in
   Json.Obj
     [ ("name", Json.Str name); ("solo", int view.solo); ("hidden", Json.Arr (List.map int view.hidden)); ("lo", vec m.lo); ("hi", vec m.hi); ("step", num (1. /. graph.lip)); ("nodes", int p.nodes); ("selects", int (Prog.selects p));
       ("root", Json.Str (Sys.getcwd ()));
-      ("features", Json.Arr (List.map (fun f -> feature ~faces:(faces f) ?paint:(coloured m f) f) (features_of m)));
+      ("features", Json.Arr (List.map (fun (f : Graph.feature) -> feature ~faces:(faces f) ?paint:(coloured m f) ?alone:(Option.bind f.result (Joined.alone p bodies)) f) (features_of m)));
       ("sketches", Json.Arr (List.map sketch m.built.sketches));
       ("assets", Json.Arr (List.map asset m.built.assets));
+      ("boards", int (List.length m.built.boards));
+      ("bodies", Json.Arr (Array.to_list (Array.map (fun (b : Joined.t) -> Json.Obj [ ("over", Json.Arr (List.map (fun way -> Json.Arr (List.map int way)) b.over)); ("inside", Json.Arr (List.map int b.inside)) ]) bodies.bodies)));
       ("shader", Json.Str s.text);
       ("gates", Json.Obj [ ("lo", vec g.lo); ("cell", num g.cell); ("cells", Json.Arr (Array.to_list (Array.map int g.cells))); ("width", int Shader.width) ]) ]
 
@@ -202,15 +227,14 @@ let scene name view =
    that is asked for: each shader's text with how many operations it is, and each
    region as seven numbers, where its box starts and ends and which shader is its own. *)
 let regions name view most =
-  let m, graph = shown name view in
-  let p = Prog.compile graph in
-  let r = Region.cut ~most p (Prog.ctx p) ~lo:m.lo ~hi:m.hi in
+  let m, _, (_, p, bodies) = drawn name view in
+  let r = Region.cut ~most p bodies (Prog.ctx p) ~lo:m.lo ~hi:m.hi in
   Json.Obj
     [ ("operations", int r.total);
       ("shaders", Json.Arr (Array.to_list (Array.map (fun ((made : Region.program), text) -> Json.Obj [ ("text", Json.Str text); ("operations", int (Array.length made.steps)) ]) r.shaders)));
       ("regions", Json.Arr (List.concat_map (fun (g : Region.region) -> List.map num (Array.to_list g.lo @ Array.to_list g.hi) @ [ int g.shader ]) (Array.to_list r.regions)));
-      (* the cells inside the solid, six numbers each: where a cut shows the solid cut open *)
-      ("solid", Json.Arr (List.concat_map (fun (lo, hi) -> List.map num (Array.to_list lo @ Array.to_list hi)) (Array.to_list r.solid))) ]
+      (* the cells inside the solid, seven numbers each, the last the body it is inside: where a cut shows the solid cut open *)
+      ("solid", Json.Arr (List.concat_map (fun (lo, hi, body) -> List.map num (Array.to_list lo @ Array.to_list hi) @ [ int body ]) (Array.to_list r.solid))) ]
 
 (* What the ray from o along d hits: sphere tracing inside the model's box, as the
    shader does, then the full evaluation at the point reached. *)

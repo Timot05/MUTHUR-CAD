@@ -31,6 +31,7 @@ type t = {
   mutable names : string array;  (** face names, by face id *)
   ids : (string, int) Hashtbl.t;
   blends : (int * int list, int) Hashtbl.t;
+  index : (int, int) Hashtbl.t;  (** a node of the graph, by its id, to its node here *)
 }
 
 let face_id p name =
@@ -63,7 +64,7 @@ let compile (g : G.t) =
     !regs - 1
   in
   let p0 = { nodes = 0; kind = [||]; first = [||]; last = [||]; inputs = [||]; lip = [||]; jump = [||]; keep = [||]; made = [||]; fixed = [||]; feature = [||];
-             root = 0; code = [||]; a = [||]; b = [||]; k = [||]; names = [||]; ids = Hashtbl.create 64; blends = Hashtbl.create 64 } in
+             root = 0; code = [||]; a = [||]; b = [||]; k = [||]; names = [||]; ids = Hashtbl.create 64; blends = Hashtbl.create 64; index } in
   (* A formula's operations; a slot reads the result register of the input it stands for. *)
   let formula (e : E.t) ins =
     let memo = Hashtbl.create 16 in

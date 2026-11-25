@@ -17,6 +17,7 @@ It is an implicit kernel: a solid is a function of space, negative inside and po
 - **Pictures and cuts without the page.** `mk52 picture` and `mk52 section` are made by the kernel itself, so they work in a terminal, in a script, or for an AI agent.
 - **Checks.** `mk52 clash` says which parts of an assembly run into each other, touch, or come too near. `mk52 skins` finds faces of no thickness, where a cut did not go quite far enough. `mk52 extract` finds every edge and corner and flags what looks unintended.
 - **Things to take away.** An STL mesh (`mk52 mesh`), and a DXF outline of a flat part such as a circuit board (`mk52 outline`).
+- **Circuit boards as code (an experiment).** A board is written like a part: its outline a sketch, its parts, traces, vias and pours as code (`lib/circuit.ml`), in the same project as the case it goes into and from the same dimensions. `mk52 board` says whether every net is in one piece and no two are too near, and draws it; and the page shows the copper on the board where it is in the model, each layer on its own face.
 - **Bought parts in place.** A STEP or STL file from a maker is shown with the model, where the code puts it.
 - **Tools for AI agents.** The same kernel is offered to an agent as tools, so it can look at what it has built.
 
@@ -138,6 +139,7 @@ What there is to build with is the kernel's own code, which a design folder reac
 | `mk52 picture <model> [...]` | a picture made by the kernel, with no page and no graphics card: a PNG whose path is printed. `yaw=` `pitch=` `distance=` `target=x,y,z` `edges` `mesh` `paint` (each part in its own colour) `size=800x600` `out=` |
 | `mk52 extract <model> [32\|64\|128]` | its edges and corners, printed with every flag, and drawn in the page if the model is open |
 | `mk52 outline <model> [out=file.dxf]` | the outline of a flat part, a board's: the edges round its top, holes too, as the lines, arcs and circles they are, in a DXF file in mm |
+| `mk52 board <model> [board] [check [all] [fields] \| picture [front\|back\|inner1\|all] [width=] [window=x0,y0,x1,y1] \| view]` | the circuit board a model builds: its nets, each in one piece or where it is open, any two nearer than the board allows, copper too near the board's edge, its pours and their islands (`fields`: every pair asked from the two fields in the plane, not from the shapes' numbers, to hold the one against the other); a picture of it, a net a colour; or a page that draws it on the graphics card, to pan, zoom and pick a net in |
 | `mk52 skins <model>` | its faces of no thickness: where two faces lie on one surface with air on both sides, each with the two faces and where |
 | `mk52 clash <model> [other] [gap=0.3]` | whether its parts run into each other, touch, or are nearer than the gap: every pair, and its bought parts against them; or its parts against another model's. What a design says is meant (`Clash.allow`) is listed apart |
 | `mk52 section <model> z=<n>` | a cut through it where that coordinate (`x=`, `y=` or `z=`) is that number: what is solid, each part in a colour of its own, with a scale; the other two `from:to` to look closer; `text` for the cut as letters |

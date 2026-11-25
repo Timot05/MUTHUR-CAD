@@ -28,8 +28,12 @@ type t = { root : cell; whole : Bytes.t; cells : int; leaves : cell list  (** la
 let centre c = Array.map (fun l -> l +. (0.5 *. c.size)) c.lo
 let radius c = 0.5 *. sqrt 3. *. c.size
 
-(* The cell's decisions, from its parent's and one evaluation at its centre. *)
-let prune (p : Prog.t) (c : Prog.ctx) parent x r =
+(* The cell's decisions, from its parent's and one evaluation at its centre.
+
+   [joins]: the unions that join the model's bodies, where the page may take a body out
+   by a switch (Joined). One of those gives a side up only where that side is outside all
+   over the cell as well: with the side it takes switched off, the other is the model. *)
+let prune ?(joins = Bytes.empty) (p : Prog.t) (c : Prog.ctx) parent x r =
   let st = ref parent and live = ref [] in
   Prog.start p c ~full:false parent;
   let decide n side =
@@ -51,8 +55,10 @@ let prune (p : Prog.t) (c : Prog.ctx) parent x r =
               let g = ins.(0) in
               Prog.ev p c x g;
               let v = c.v.(p.last.(g)) and reach = (p.lip.(g) *. r) +. p.jump.(g) in
-              if v -. reach > 0. then (decide n '\002'; visit ins.(2))
-              else if v +. reach <= 0. then (decide n '\001'; visit ins.(1))
+              (* the guard read both sides: each has its value at the centre *)
+              let spare s = n >= Bytes.length joins || Bytes.unsafe_get joins n = '\000' || c.v.(p.last.(ins.(s))) -. (p.lip.(ins.(s)) *. r) -. p.jump.(ins.(s)) > 0. in
+              if v -. reach > 0. && spare 1 then (decide n '\002'; visit ins.(2))
+              else if v +. reach <= 0. && spare 2 then (decide n '\001'; visit ins.(1))
               else (live := n :: !live; visit g; visit ins.(1); visit ins.(2)))
     end
   in
@@ -92,11 +98,12 @@ let build (p : Prog.t) (c : Prog.ctx) ~lo ~hi ~depth =
 
 (* Every cell the pruning stops at: one that holds no surface, or one at the last level.
    [f] is given where the cell starts, its side, its decisions and whether it may hold
-   surface. The decisions are made to hold within [pad] of the cell too. *)
-let cells ?(pad = 0.) (p : Prog.t) (c : Prog.ctx) ~lo ~hi ~depth f =
+   surface. The decisions are made to hold within [pad] of the cell too, and with
+   [joins] whatever bodies are switched off ([prune]). *)
+let cells ?(pad = 0.) ?joins (p : Prog.t) (c : Prog.ctx) ~lo ~hi ~depth f =
   let rec visit l size parent d =
     let cell = { lo = l; size; state = parent; live = 0; surface = true; kids = [||] } in
-    let state, _, surface = prune p c parent (centre cell) (radius cell +. pad) in
+    let state, _, surface = prune ?joins p c parent (centre cell) (radius cell +. pad) in
     if surface && d < depth then List.iter (fun o -> Option.iter (fun k -> visit k (0.5 *. size) state (d + 1)) (octant l (0.5 *. size) hi o)) [ 0; 1; 2; 3; 4; 5; 6; 7 ]
     else f l size state surface
   in

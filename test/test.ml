@@ -254,6 +254,122 @@ let mesh_to name tol =
   in
   check (Printf.sprintf "%s: meshed to within %g, in %d triangles" name tol (Array.length m.triangles)) (faults = []) (String.concat "; " faults)
 
+(* ---- Circuit boards ---- *)
+
+(* A board's copper is held against its nets (lib/circuit.ml). A board that is right is
+   said to be; one with a via left out has its net in two pieces; a trace run 0.1 from
+   another net's pad is found too near, and how near; a pour cut in two by a trace is
+   two islands, a corner of it that reaches nothing is dropped, and the net is open.
+   And a board made solid goes with what its model's program writes, where it was made. *)
+let boards () =
+  let module C = Circuit in
+  let board name = Circuit_board.made := []; ignore ((List.assoc name Models.Boards.all) ()); List.hd !Circuit_board.made in
+  let found name = let _, _, pours, found = C.Check.check (board name) in (pours, found) in
+  check "a board: every net in one piece, none too near" (snd (found "lights") = []) "something was found on lights";
+  check "a board: its pours are one island each" (List.for_all (fun p -> C.Pour.islands p = (1, 1)) (fst (found "lights"))) "a pour of lights is in pieces";
+  (match snd (found "blink-broken") with
+   | [ C.Check.Near (p, q, d, _); C.Check.Open ("GND", [ _; _ ]) ] -> check "a board: a trace too near a pad, and a net in two" ((p.what, q.net) = ("D1.2", "VCC") && Float.abs (d -. 0.1) < 0.005) (Printf.sprintf "%s and %s, %g apart" p.what q.what d)
+   | other -> check "a board: a trace too near a pad, and a net in two" false (Printf.sprintf "%d things found" (List.length other)));
+  (match found "blink-cut" with
+   | [ pour ], [ C.Check.Open ("GND", [ _; _ ]) ] -> check "a board: a pour cut in two, a corner of it dropped" (C.Pour.islands pour = (2, 3)) (let k, a = C.Pour.islands pour in Printf.sprintf "%d of %d islands kept" k a)
+   | _ -> check "a board: a pour cut in two, a corner of it dropped" false "not one pour and one open net");
+  (* how far apart two shapes are, from their numbers: a line beside an arc, two squares
+     turned corner to corner on one line, an arc that ends short of a line it would cross *)
+  let apart (f : C.Copper.form) (g : C.Copper.form) = fst C.Copper.(apart (Option.get (core f.shape)) (Option.get (core g.shape))) in
+  let near what got want = check ("a board: " ^ what) (Float.abs (got -. want) < 1e-9) (Printf.sprintf "%.9g, not %.9g" got want) in
+  let quarter = C.Copper.band (10., 0.) (10. *. sqrt 0.5, 10. *. sqrt 0.5) (0., 10.) 0.1 in
+  near "a line 2 outside an arc, each 0.2 wide" (apart quarter (C.Copper.stadium (12., 0.) (12., 5.) 0.1)) 1.8;
+  near "an arc that ends before the line it would cross" (apart quarter (C.Copper.stadium (-3., 9.) (-3., 11.) 0.1)) 2.8;
+  near "two squares turned corner to corner" (apart (C.Copper.rounded (0., 0.) 1. 1. 0. 45.) (C.Copper.rounded (2., 0.) 1. 1. 0. 45.)) (2. -. sqrt 2.);
+  near "two squares side by side on one line" (apart (C.Copper.rounded (0., 0.) 1. 1. 0. 0.) (C.Copper.rounded (1.5, 0.) 1. 1. 0. 0.)) 0.5;
+  (* an opening is an edge of the board: a place is as far inside as from the nearest of them *)
+  let holed = C.Board.make "holed" (C.Board.rect 20. 10.) in
+  C.Board.opening holed (Sketch.polygon [ (8., 4.); (12., 4.); (12., 6.); (8., 6.) ]);
+  near "a place 1 from an opening and 3 from the edge" (C.Board.inside holed (7., 5.)) 1.;
+  check "a board: inside an opening is outside the board" (C.Board.inside holed (10., 5.) < 0.) "it is not";
+  C.Board.arc holed ~net:"A" ~centre:(4., 5.) ~radius:2. 0. 360.;
+  check "a board: a whole circle of trace is three arcs, joined" (match C.Check.check holed with 3, [ "A" ], _, [] -> true | _ -> false) "it is not one net in one piece";
+  (* The same from the two fields, searched for in the plane: for shapes thrown at
+     random, as far apart as their numbers say, and none that is near missed. *)
+  let searched (f : C.Copper.form) (g : C.Copper.form) =
+    let p = C.Copper.piece "p" ~net:"A" [ C.Copper.Front ] f and q = C.Copper.piece "q" ~net:"B" [ C.Copper.Front ] g in
+    Option.map fst (C.Copper.near ~limit:3. p (C.Copper.reader (C.Copper.field p)) q (C.Copper.reader (C.Copper.field q)))
+  in
+  Random.init 7;
+  let some () =
+    let at () = (Random.float 6., Random.float 6.) in
+    match Random.int 3 with
+    | 0 -> let a = at () in let b = at () in C.Copper.stadium a b (0.05 +. Random.float 0.3)
+    | 1 -> let c = at () in let w = 0.4 +. Random.float 2. in let h = 0.4 +. Random.float 2. in let r = Random.float 0.15 in C.Copper.rounded c w h r (Random.float 360.)
+    | _ ->
+        let cx, cy = at () in
+        let big = 0.5 +. Random.float 3. in
+        let from = Random.float 6.28 in
+        let sweep = 0.3 +. Random.float 2. in
+        let on t = (cx +. (big *. cos t), cy +. (big *. sin t)) in
+        C.Copper.band (on from) (on (from +. (sweep /. 2.))) (on (from +. sweep)) (0.05 +. Random.float 0.2)
+  in
+  let unlike = ref 0 and worst = ref 0. and asked = ref 0 in
+  for _ = 1 to 300 do
+    let f = some () in
+    let g = some () in
+    let exact = apart f g in
+    match searched f g with
+    | Some d ->
+        incr asked;
+        if exact > 0. then (worst := Float.max !worst (Float.abs (d -. exact)); if Float.abs (d -. exact) > 4e-3 then incr unlike) else if d > 2e-3 then incr unlike
+    | None -> if exact < 3. -. 4e-3 then incr unlike
+  done;
+  check "a board: two shapes as far apart by their fields as by their numbers" (!unlike = 0 && !asked > 100) (Printf.sprintf "%d of 300 unlike, the most %.4g off; %d found near" !unlike !worst !asked);
+  (* copper of an outline of its own, an L: 0.15 from a trace of another net; and with
+     a trace of its own net over it, one piece with it *)
+  let own net y =
+    let b = C.Board.make "own" (C.Board.rect 20. 10.) in
+    C.Board.copper b ~net "the L" (Sketch.polygon [ (2., 2.); (6., 2.); (6., 3.); (3., 3.); (3., 6.); (2., 6.) ]);
+    C.Board.trace b ~net:"A" ~width:0.2 [ (3.5, y); (8., y) ];
+    let _, _, _, found = C.Check.check b in
+    found
+  in
+  (match own "B" 3.25 with
+   | [ C.Check.Near (_, _, d, _) ] -> check "a board: copper of an outline of its own, 0.15 from a trace" (Float.abs (d -. 0.15) < 3e-3) (Printf.sprintf "%g apart" d)
+   | other -> check "a board: copper of an outline of its own, 0.15 from a trace" false (Printf.sprintf "%d things found" (List.length other)));
+  check "a board: and a trace of its net over it is one piece with it" (own "A" 2.9 = []) "it is not";
+  (* the board's edge: a trace along it, 0.15 in, where 0.2 is asked; and one that runs out over it *)
+  let edged points =
+    let b = C.Board.make "edged" (C.Board.rect 20. 10.) in
+    C.Board.trace b ~net:"A" ~width:0.2 points;
+    let _, _, _, found = C.Check.check b in
+    found
+  in
+  (match edged [ (5., 0.25); (15., 0.25) ] with
+   | [ C.Check.Edge (_, d, _) ] -> check "a board: a trace 0.15 from the edge, where 0.2 is asked" (Float.abs (d -. 0.15) < 3e-3) (Printf.sprintf "%g from it" d)
+   | other -> check "a board: a trace 0.15 from the edge, where 0.2 is asked" false (Printf.sprintf "%d things found" (List.length other)));
+  (match edged [ (18., 5.); (20.5, 5.) ] with
+   | [ C.Check.Edge (_, d, _) ] -> check "a board: a trace that runs out over the edge" (Float.abs (d +. 0.6) < 3e-3) (Printf.sprintf "%g from it" d)
+   | other -> check "a board: a trace that runs out over the edge" false (Printf.sprintf "%d things found" (List.length other)));
+  check "a board: a trace 0.3 from the edge is let be" (edged [ (5., 0.4); (15., 0.4) ] = []) "it is found";
+  Circuit_board.made := [];
+  let built = Emit.built ((List.assoc "blink" Models.Boards.all) ()) in
+  check "a board: it goes with its model" (List.map (fun (b : C.Board.t) -> b.name) built.boards = [ "blink" ]) (string_of_int (List.length built.boards));
+  (* and where it is kept in the model is where its copper is drawn: the frame it was kept in *)
+  let kept = C.Board.make "kept" (C.Board.rect 10. 10.) in
+  Graph.within (Frame.translate (1., 2., 3.)) (fun () -> C.Board.keep ~thickness:0.8 kept);
+  let said = Json.to_string (C.Page.data kept) in
+  let has part = let n = String.length part in let rec at i = i + n <= String.length said && (String.sub said i n = part || at (i + 1)) in at 0 in
+  check "a board: its plane in the model is the frame it was kept in" (kept.frame.t = [| 1.; 2.; 3. |] && kept.thickness = 0.8 && has "\"o\":[1,2,3]") said;
+  (* a part's body is a box on the board: on the front it stands on the face, on the back
+     it hangs under it, and one of no known size has none *)
+  let boxed = C.Footprint.make ~body:((-1., -0.5, 0.), (1., 0.5, 0.8)) "boxed" [ C.Footprint.pad "1" Rect (0., 0.) (0.5, 0.5) ] in
+  let bodied = C.Board.make "bodied" (C.Board.rect 20. 10.) in
+  C.Board.part bodied "A" ~footprint:boxed (5., 5.);
+  C.Board.part bodied "B" ~footprint:boxed ~back:true ~turn:90. (10., 5.);
+  C.Board.part bodied "C" ~footprint:C.Footprint.r0603 (15., 5.);
+  let numbers = C.Page.bodies bodied in
+  let at i = List.nth numbers i in
+  check "a board: a part's body is a box on its side of the board" (List.length numbers = 30 && (at 8, at 11) = (0.8, 0.) && Float.abs (at 23 +. 0.8) < 1e-6 && Float.abs (at 26 +. 1.6) < 1e-6) (String.concat " " (List.map (Printf.sprintf "%g") numbers));
+  check "a board: a footprint is written out as code with its body" (let code = C.Footprint.code boxed in let has part = let n = String.length part in let rec go i = i + n <= String.length code && (String.sub code i n = part || go (i + 1)) in go 0 in has "~body:(((-1.), (-0.5), 0.), (1., 0.5, 0.8))" && has "let boxed =") (C.Footprint.code boxed);
+  Circuit_board.made := []
+
 (* ---- The shader's gates ---- *)
 
 (* The page's shader skips a gate where its table says every select in it keeps its
@@ -264,8 +380,9 @@ let mesh_to name tol =
 let gates name least =
   let lo, hi, g = Models.Sets.find name in
   let h = hold ~lo ~hi (g ()) in
-  let s = Shader.model ~least h.p h.p.root in
-  let grid = Shader.decisions h.p h.c s ~lo ~hi in
+  let bodies = Joined.find h.p in
+  let s = Shader.model ~least h.p bodies in
+  let grid = Shader.decisions h.p bodies h.c s ~lo ~hi in
   let of_select = Hashtbl.create 64 in
   Array.iteri (fun k links -> List.iter (fun (n, so_far) -> Hashtbl.replace of_select n (k, so_far)) links) s.gates;
   Random.init 11;
@@ -319,14 +436,14 @@ let chamfers () =
 let regions name most =
   let lo, hi, g = Models.Sets.find name in
   let h = hold ~lo ~hi (g ()) in
-  let r = Region.cut ~most h.p h.c ~lo ~hi in
+  let r = Region.cut ~most h.p (Joined.find h.p) h.c ~lo ~hi in
   Random.init 5;
   let within (g : Region.region) x = x.(0) >= g.lo.(0) && x.(1) >= g.lo.(1) && x.(2) >= g.lo.(2) && x.(0) <= g.hi.(0) && x.(1) <= g.hi.(1) && x.(2) <= g.hi.(2) in
   let wrong = ref 0 and furthest = ref 0. and outside = ref 0 and hollow = ref 0 and lost = ref 0 in
-  let inside (lo, hi) x = x.(0) >= lo.(0) && x.(1) >= lo.(1) && x.(2) >= lo.(2) && x.(0) <= hi.(0) && x.(1) <= hi.(1) && x.(2) <= hi.(2) in
+  let inside (lo, hi, _) x = x.(0) >= lo.(0) && x.(1) >= lo.(1) && x.(2) >= lo.(2) && x.(0) <= hi.(0) && x.(1) <= hi.(1) && x.(2) <= hi.(2) in
   (* the cells kept as solid are solid all through *)
   Array.iter
-    (fun (l, u) ->
+    (fun (l, u, _) ->
       for _ = 1 to 50 do
         let x = Array.init 3 (fun a -> l.(a) +. Random.float (u.(a) -. l.(a))) in
         if not ((probe h x).d.v < 0.) then incr hollow
@@ -524,6 +641,101 @@ let skins () =
     (v [| 0.; 0.; 5. |] < -1. && Float.abs (v [| 5.; 0.; 5. |]) < 1e-9 && Float.abs (v [| 2.; 0.; 5. |] +. 3.) < 1e-9 && Float.abs (v [| 0.; 7.; 5. |] -. 2.) < 1e-9 && Float.abs (v [| 1.; 0.; 10. |]) < 1e-9)
     (Printf.sprintf "on the axis %.4f, on the side %.2g, 3 inside it %.4f, 2 outside it %.4f, on the head %.2g" (v [| 0.; 0.; 5. |]) (v [| 5.; 0.; 5. |]) (v [| 2.; 0.; 5. |]) (v [| 0.; 7.; 5. |]) (v [| 1.; 0.; 10. |]))
 
+(* ---- Bodies switched off ---- *)
+
+(* The page takes a body out of the picture by a switch in the shaders, not by a new
+   model (Joined). Seven bodies: a block, three balls inside it, a knob that sticks out
+   of its side, a lid on its top face and a hollow ball beside it. With every set of them
+   switched off, what the page draws must be the model made of the others: a region's
+   program and the one shader under its table of gates are below zero exactly where
+   that model is, with its value there, and never nearer zero than it elsewhere; and
+   the regions hold all its surface, the regions and the solid cells all its inside.
+
+   The grain is where the octree would give it up were its decisions not made to hold
+   for this: in a cell 2.75 across whose middle is 3.6 inside the block, far enough for
+   the block to be below the grain all over the cell, and which the grain's surface
+   passes through. Without that care (Octree.prune, [joins]) this fails. *)
+let bodies () =
+  let square r = Sketch.polygon [ (-.r, -.r); (r, -.r); (r, r); (-.r, r) ] in
+  let parts =
+    [| Sketch.extrude ~lo:(-16.) ~hi:16. (square 16.); Solid.sphere "pearl" (0., 0., 0.) 3.; Solid.sphere "seed" (9., 9., 9.) 2.; Solid.sphere "grain" (10.47, 3.28, 3.28) 1.5; Solid.sphere "knob" (18., 0., 0.) 6.;
+       Sketch.extrude ~lo:16. ~hi:19. (square 12.); Graph.subtract (Solid.sphere "ball" (0., -19., 0.) 2.6) (Solid.sphere "hollow" (0., -19., 0.) 1.3) |]
+  in
+  let join = function [] -> Graph.raw_piece "" (Expr.const Joined.far) | first :: rest -> List.fold_left Graph.union first rest in
+  let lo = [| -22.; -22.; -22. |] and hi = [| 22.; 22.; 22. |] in
+  let h = hold ~lo ~hi (join (Array.to_list parts)) in
+  let f = Joined.find h.p in
+  Random.init 23;
+  let point lo hi = Array.init 3 (fun a -> lo.(a) +. Random.float (hi.(a) -. lo.(a))) in
+  let value (h : held) n x = Prog.start h.p h.c ~full:false h.whole; Prog.ev h.p h.c x n; h.c.v.(h.p.last.(n)) in
+  (* which part each body is: the one with its values *)
+  let alone = Array.map (hold ~lo ~hi) parts and probes = List.init 8 (fun _ -> point lo hi) in
+  let part_of = Array.map (fun (b : Joined.t) -> List.find_opt (fun i -> List.for_all (fun x -> value h b.node x = value alone.(i) alone.(i).p.root x) probes) (List.init (Array.length parts) Fun.id)) f.bodies in
+  let found = List.sort compare (Array.to_list part_of) = List.init (Array.length parts) Option.some in
+  check "bodies: what a model's unions join" found (Printf.sprintf "%d bodies" (Array.length f.bodies));
+  if found then begin
+    let r = Region.cut ~most:300 h.p f h.c ~lo ~hi in
+    let s = Shader.model ~least:8 h.p f in
+    let grid = Shader.decisions h.p f h.c s ~lo ~hi in
+    let of_select = Hashtbl.create 16 in
+    Array.iteri (fun k links -> List.iter (fun (n, so_far) -> Hashtbl.replace of_select n (k, so_far)) links) s.gates;
+    let within l u x = x.(0) >= l.(0) && x.(1) >= l.(1) && x.(2) >= l.(2) && x.(0) <= u.(0) && x.(1) <= u.(1) && x.(2) <= u.(2) in
+    let wrong = ref 0 and gated = ref 0 and skipped = ref 0 and outside = ref 0 and lost = ref 0 and hollow = ref 0 in
+    for set = 0 to (1 lsl Array.length parts) - 1 do
+      let off b = set land (1 lsl Option.get part_of.(b)) <> 0 in
+      let left = hold ~lo ~hi (join (List.filteri (fun i _ -> set land (1 lsl i) = 0) (Array.to_list parts))) in
+      let model x = Prog.value left.p left.c left.whole x in
+      (* drawn right: the model's value where either is inside, and no nearer zero elsewhere *)
+      let right drawn model = if Float.min drawn model <= 0. then Float.abs (drawn -. model) <= 1e-9 *. (1. +. Float.abs model) else drawn >= model -. 1e-9 in
+      Array.iter (fun (g : Region.region) -> for _ = 1 to 40 do let x = point g.lo g.hi in if not (right (Region.run ~off (fst r.shaders.(g.shader)) x) (model x)) then incr wrong done) r.regions;
+      Array.iter (fun (l, u, b) -> if not (off b) then for _ = 1 to 20 do if not (model (point l u) < 0.) then incr hollow done) r.solid;
+      (* the one shader, as its chains run under the table: a link in a gate not entered keeps its chain so far *)
+      let rec chained x n =
+        match f.of_node.(n) with
+        | -1 -> (
+            match Hashtbl.find_opt of_select n with
+            | Some (k, so_far) when not (Shader.enters grid s x k) -> incr skipped; chained x h.p.inputs.(n).(so_far)
+            | _ -> Float.min (chained x h.p.inputs.(n).(1)) (chained x h.p.inputs.(n).(2)))
+        | b -> if off b then Joined.far else value h n x
+      in
+      for _ = 1 to 3000 do
+        let x = point lo hi in
+        let v = model x in
+        if not (right (chained x h.p.root) v) then incr gated;
+        let region = Array.exists (fun (g : Region.region) -> within g.lo g.hi x) r.regions in
+        if Float.abs v < 1e-3 *. h.diag && not region then incr outside;
+        if v < 0. && not (region || Array.exists (fun (l, u, b) -> (not (off b)) && within l u x) r.solid) then incr lost
+      done
+    done;
+    check
+      (Printf.sprintf "bodies: any of them switched off, in %d regions and under %d gates" (Array.length r.regions) (Array.length s.gates))
+      (!wrong = 0 && !gated = 0 && !outside = 0 && !lost = 0 && !hollow = 0 && !skipped > 0 && Array.length s.gates > 0)
+      (Printf.sprintf "a region's field is wrong at %d points and the shader's at %d; %d points of the surface are in no region, %d of the solid in nothing, %d of a solid cell outside; %d links were skipped" !wrong !gated !outside !lost
+         !hollow !skipped)
+  end;
+  (* what a switch may take out: a feature that is a body whole, not one inside a body *)
+  let pos = ("test", 0, 0, 0) in
+  let made =
+    Graph.union
+      (Graph.feature pos "peg" (fun () -> Solid.sphere "peg" (-3., 0., 0.) 1.))
+      (Graph.feature pos "cup" (fun () -> Graph.subtract (Solid.sphere "cup" (3., 0., 0.) 2.) (Graph.feature pos "bore" (fun () -> Solid.sphere "bore" (3., 0., 0.) 1.))))
+  in
+  let feature name = List.find (fun (f : Graph.feature) -> f.path = name) !Graph.features in
+  let by name = (feature name).fid in
+  let p = Prog.compile made in
+  let f = Joined.find p in
+  let gone names = let ids = List.map by names in fun id -> List.mem id ids in
+  let out names = List.length (List.filter (Joined.out (gone names)) (Array.to_list f.bodies)) in
+  check "bodies: a feature that is a body is a switch's to take out, a cut inside one is not"
+    (Array.length f.bodies = 2 && Joined.plain f (gone [ "peg" ]) && out [ "peg" ] = 1 && Joined.plain f (gone [ "cup"; "cup/bore" ]) && out [ "cup"; "cup/bore" ] = 1 && (not (Joined.plain f (gone [ "cup/bore" ]))) && out [ "cup/bore" ] = 0)
+    (Printf.sprintf "%d bodies" (Array.length f.bodies));
+  (* and what the switches show alone: a feature that is bodies of the model, or a union of them made for the purpose *)
+  let alone g = Option.map (List.map fst) (Joined.alone p f g) in
+  let of_ name = Option.get (feature name).result in
+  check "bodies: a feature made of the model's bodies is shown alone by the others' switches"
+    (Option.map List.length (alone (of_ "peg")) = Some 1 && alone (of_ "peg") <> alone (of_ "cup") && Option.map List.length (alone (Graph.union (of_ "cup") (of_ "peg"))) = Some 2 && alone (of_ "cup/bore") = None)
+    "a feature's bodies are not those it is made of"
+
 (* A group (Graph.group): a name around features. It may build anything; the features
    made in it are under it, named within it; alone, it is those features together. *)
 let groups () =
@@ -568,6 +780,7 @@ let () =
       extraction name ~lo ~hi (g ()) expected [ 6; 7 ])
     [ ("arm", (48, 82, 10)); ("bracket", (36, 65, 11)) ];
   List.iter (fun (name, depth) -> mesh name depth) [ ("cube-three-fillets", 5); ("pyramid", 5); ("cube-hole", 5); ("bracket", 5); ("block", 6); ("arm", 6) ];
+  boards ();
   List.iter (fun (name, tol) -> mesh_to name tol) [ ("cube-three-fillets", 0.01); ("pyramid", 0.01); ("cube-hole", 0.01); ("bracket", 0.05); ("block", 0.05); ("arm", 0.05) ];
   List.iter (fun (name, least) -> gates name least) [ ("bracket", 240); ("bracket", 40); ("block", 40); ("arm", 40); ("pyramid", 40) ];
   List.iter (fun name -> List.iter (regions name) [ 1; 40; 400 ]) [ "bracket"; "block"; "arm"; "pyramid"; "cube-fillet"; "torus" ];
@@ -579,5 +792,6 @@ let () =
   builder ();
   skins ();
   groups ();
+  bodies ();
   kept ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)
