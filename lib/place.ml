@@ -53,6 +53,7 @@ let asset id = under "assets" (id ^ ".mesh")
 let state name = under "state" (name ^ ".json")
 let picture name = under "pictures" (name ^ ".png")
 let surface name = under "meshes" (name ^ ".stl")
+let outline name = under "outlines" (name ^ ".dxf")
 
 (* Asked for far more often than written: nothing is made for them. *)
 let front = Filename.concat made "front"

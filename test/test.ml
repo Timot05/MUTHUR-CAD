@@ -347,6 +347,33 @@ let assets () =
 (* The shapes the README says are still beyond the extractor at some cell size. *)
 let hard = [ "villarceau"; "plane-through-edge"; "coplanar-boxes" ]
 
+(* A traced outline written as what it is (Dxf): points along a line give the line, along
+   an arc the arc with its centre, radius and ends, round a circle the circle; and an
+   edge that is two arcs run into each other, as round corners do, gives the two, cut
+   where they touch. *)
+let outlines () =
+  let near a b = Float.abs (a -. b) < 1e-3 in
+  let on (cx, cy) r from to_ n = List.init (n + 1) (fun i -> let t = (from +. ((to_ -. from) *. float_of_int i /. float_of_int n)) *. Float.pi /. 180. in (cx +. (r *. cos t), cy +. (r *. sin t))) in
+  let said = function Dxf.Line _ -> "a line" | Dxf.Arc (_, r, a, b) -> Printf.sprintf "an arc of %.3f from %.2f to %.2f" r a b | Dxf.Circle (_, r) -> Printf.sprintf "a circle of %.3f" r in
+  let all es = String.concat ", " (List.map said es) in
+  let is name ~closed pts right =
+    let es, exact = Dxf.traced ~closed pts in
+    check ("outlines: " ^ name) (exact && right es) (all es)
+  in
+  is "points in a line are the line" ~closed:false (List.init 9 (fun i -> (float_of_int i, 2. *. float_of_int i))) (function [ Dxf.Line ((0., 0.), (8., 16.)) ] -> true | _ -> false);
+  is "points on an arc are the arc, whichever way it was traced" ~closed:false (List.rev (on (3., -2.) 4. 30. 120. 12))
+    (function [ Dxf.Arc ((cx, cy), r, a, b) ] -> near cx 3. && near cy (-2.) && near r 4. && near a 30. && near b 120. | _ -> false);
+  is "points round a circle are the circle" ~closed:true (on (1., 1.) 2.5 0. 350. 35) (function [ Dxf.Circle ((cx, cy), r) ] -> near cx 1. && near cy 1. && near r 2.5 | _ -> false);
+  (* an S: a quarter about (0, 4) up to (4, 4), then one about (8, 4) the other way *)
+  is "two arcs that run into each other are cut where they touch" ~closed:false (on (0., 4.) 4. (-90.) (-3.) 14 @ on (8., 4.) 4. 177. 90. 14)
+    (function
+      | [ Dxf.Arc ((ax, ay), r, a0, a1); Dxf.Arc ((bx, by), r', b0, b1) ] ->
+          near ax 0. && near ay 4. && near r 4. && near a0 270. && Float.abs (a1 -. 360.) < 0.05 || near a1 0. && near bx 8. && near by 4. && near r' 4. && near b0 90. && Float.abs (b1 -. 180.) < 0.05
+      | _ -> false);
+  let text = Dxf.written [ Dxf.Line ((0., 0.), (1., 0.)); Dxf.Circle ((0., 0.), 2.) ] in
+  let has part = let n = String.length part in let rec at i = i + n <= String.length text && (String.sub text i n = part || at (i + 1)) in at 0 in
+  check "outlines: the file has its entities, in millimetres, and ends" (has "$INSUNITS\n70\n4\n" && has "0\nLINE\n" && has "0\nCIRCLE\n" && has "40\n2.000000\n" && has "0\nEOF\n") text
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -360,4 +387,5 @@ let () =
   List.iter (fun name -> List.iter (regions name) [ 1; 40; 400 ]) [ "bracket"; "block"; "arm"; "pyramid"; "cube-fillet"; "torus" ];
   chamfers ();
   assets ();
+  outlines ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

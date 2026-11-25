@@ -20,6 +20,9 @@
                                      and corners: an STL file with a solid for each face,
                                      what the mesh is like, and a picture of it (raw: as
                                      marched, not made even)
+     mk52 outline <model> [out=]     the outline of a flat part, a board's: the edges round
+                                     its top, holes too, as the lines, arcs and circles
+                                     they are, in a DXF file in mm whose path is printed
      mk52 picture <model> [...]      a picture of it, made by the kernel with no page and
                                      no graphics card: a PNG, whose path is printed. After
                                      the model, any of: yaw=40 pitch=26 (degrees; pitch 90
@@ -54,7 +57,7 @@
    kernel, as it is now. *)
 open Mk52
 
-let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | new <project> <file> | brief <model> | mcp | install"
+let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | new <project> <file> | brief <model> | mcp | install"
 let home = Place.home ()
 
 (* The design folder: here or above, the folder with a dune-project and the link to the tool. *)
@@ -197,6 +200,13 @@ let () =
         Out_channel.with_open_bin pic (fun oc -> output_string oc (Project.picture ~w:1200 ~h:900 ~surface (Project.framed surface m)));
         print_endline text;
         List.iter (fun f -> print_endline (Filename.concat (Sys.getcwd ()) f)) [ out; pic ]
+    | "outline" :: name :: options ->
+        let m = Project.model name in
+        let text, dxf = Project.outline m in
+        let out = match options with [] -> Place.outline m.name | [ o ] when String.length o > 4 && String.sub o 0 4 = "out=" -> String.sub o 4 (String.length o - 4) | _ -> failwith "after the model, only out=file.dxf" in
+        Out_channel.with_open_bin out (fun oc -> output_string oc dxf);
+        print_endline text;
+        print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
     | "picture" :: name :: options ->
         let opt k = List.find_map (fun o -> match String.index_opt o '=' with Some i when String.sub o 0 i = k -> Some (String.sub o (i + 1) (String.length o - i - 1)) | _ -> None) options in
         let num k d = match opt k with Some v -> ( match float_of_string_opt v with Some x -> x | None -> failwith (k ^ " is a number")) | None -> d in

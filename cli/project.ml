@@ -155,6 +155,27 @@ let model name : Emit.t =
 (* A model's edges and corners, its cells counted across the model itself. *)
 let topology ?depth (m : Emit.t) = Extract.extract ~fit:true ?depth ~lo:m.lo ~hi:m.hi m.built.graph
 
+(* The outline of a flat part, for a board's edge: the edges at the highest it reaches,
+   which for a plate is all round its top, holes and all, each as the line, arc or
+   circle it is (Dxf). With what there is of each, and how many were none of them. *)
+let outline (m : Emit.t) =
+  let t = topology ~depth:7 m in
+  let pieces = List.concat_map (fun (e : Extract.edge) -> List.map (fun p -> ((e.closed, e.between), p)) e.pieces) t.edges in
+  let top = List.fold_left (fun h (_, p) -> List.fold_left (fun h (x : float array) -> Float.max h x.(2)) h p) neg_infinity pieces in
+  let level = List.filter (fun (_, p) -> List.length p >= 2 && List.for_all (fun (x : float array) -> Float.abs (x.(2) -. top) < 1e-3) p) pieces in
+  let traced = List.map (fun ((closed, between), p) -> (Dxf.traced ~closed (List.map (fun (x : float array) -> (x.(0), x.(1))) p), between)) level in
+  let exact = List.concat_map (fun ((entities, exact), _) -> if exact then entities else []) traced in
+  let count f = List.length (List.filter f exact) in
+  let text =
+    Printf.sprintf "%s at z = %.6g: %d lines, %d arcs, %d circles%s%s" m.name top
+      (count (function Dxf.Line _ -> true | _ -> false)) (count (function Dxf.Arc _ -> true | _ -> false)) (count (function Dxf.Circle _ -> true | _ -> false))
+      (match List.filter_map (fun ((_, exact), (a, b)) -> if exact then None else Some (Printf.sprintf "%s | %s" a b)) traced with
+       | [] -> ""
+       | not_exact -> Printf.sprintf ", and %d edges that are none of these, written as short lines: %s" (List.length not_exact) (String.concat "; " not_exact))
+      (match List.length t.flags with 0 -> "" | n -> Printf.sprintf "; %d flags in the extraction (mk52 extract says where)" n)
+  in
+  (text, Dxf.written (List.concat_map (fun ((entities, _), _) -> entities) traced))
+
 (* How far the surface turns across an edge, in degrees, at the sharpest of a few points
    along it. An edge is wherever the face's name changes, so most edges of a part are
    smooth: a fillet's border, a line running into an arc, a fillet whose input changes.
@@ -292,6 +313,7 @@ let brief name =
           "HOW TO WORK, from this folder. The person has the page open beside their editor: a model that is open is built again, by itself, each time a file is saved, so they see what you do as you do it.";
           Printf.sprintf "  mk52 picture %s  a picture of it, made by the kernel, as a PNG whose path is printed: look at it. Add yaw= pitch= distance= target=x,y,z to look from elsewhere, edges for its edges" name;
           Printf.sprintf "  mk52 extract %s  its edges and corners, with every flag: a place where the model may not be what was meant" name;
+          Printf.sprintf "  mk52 outline %s  if it is a flat part, a board: its outline, holes too, as a DXF file of lines, arcs and circles" name;
           Printf.sprintf "  mk52 view %s     opens it in the person's page, in front" name;
           "What there is to model with, all under mk52/: sketches first (lib/sketch.ml: pulled, turned, or lofted through sections; models/bracket.ml is a worked example), then the primitives (lib/solid.ml), the graph's operations (lib/graph.ml), spline patches (lib/spline.ml) and fitted patches (lib/fit.ml).";
           "";
