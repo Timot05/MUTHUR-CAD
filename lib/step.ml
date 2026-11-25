@@ -339,8 +339,10 @@ let edge ?(detail = 1.) f s id =
       let vertex v = match args f (ref_ v) "VERTEX_POINT" with [ _; p ] -> point f s (ref_ p) | _ -> failwith "STEP: bad vertex" in
       let a = vertex va and b = vertex vb in
       let a, b = if truth same then (a, b) else (b, a) in
+      (* a curve on a surface (SolidCraft writes every edge so) is its curve in space *)
+      let rec curve id = match Hashtbl.find_opt f id with Some [ (("SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE"), _ :: c :: _) ] -> curve (ref_ c) | e -> e in
       let pts =
-        match Hashtbl.find_opt f (ref_ c) with
+        match curve (ref_ c) with
         | Some [ ("LINE", _) ] -> [ a; b ]
         | Some [ (("CIRCLE" | "ELLIPSE") as kind, _ :: p :: r :: rest) ] ->
             let p = placement f s (ref_ p) and r = s *. num r in

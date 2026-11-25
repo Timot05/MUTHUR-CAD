@@ -797,10 +797,10 @@ function lay() {
     for (const corner of edges.vertices) points.push(...corner.at, ...ink, 6)
     for (const f of edges.flags) points.push(...f.at, ...flag, 10)
   }
-  if (scene && show.sketches) for (const sketch of scene.sketches.filter(s => !gone(s.feature))) for (const loop of sketch.loops) for (const span of loop) run(span.points, [0.55, 0.3, 0.75, 1], 0.8)
+  if (scene && show.sketches) for (const sketch of scene.sketches.filter(s => !outOf(scene, s.feature))) for (const loop of sketch.loops) for (const span of loop) run(span.points, [0.55, 0.3, 0.75, 1], 0.8)
   if (scene && show.frames) {
     const long = 0.09 * length(sub(scene.hi, scene.lo))
-    const frames = [[0, { o: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }], ...scene.features.filter(f => f.frame && !gone(f.id)).map(f => [f.id, f.frame])]
+    const frames = [[0, { o: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }], ...scene.features.filter(f => f.frame && !outOf(scene, f.id)).map(f => [f.id, f.frame])]
     for (const [id, frame] of frames) {
       const half = id == 0 ? 0.5 : id == feature ? 1.8 : 1.1
       for (const [axis, colour] of [[frame.x, [0.85, 0.25, 0.2, 1]], [frame.y, [0.2, 0.62, 0.3, 1]], [frame.z, [0.2, 0.4, 0.9, 1]]]) line(frame.o, add(frame.o, times(axis, long)), colour, half)
@@ -876,18 +876,56 @@ function front(name) {
   panel()
 }
 
+// A feature as it is known across builds: a rebuild numbers features again in the order
+// the code makes them, so one is known by its path, and by which of the features of that
+// path it is ("knob" made four times is knob#0 to knob#3).
+function keys(features) {
+  const seen = new Map(), key = new Map()
+  for (const f of features) { const n = seen.get(f.path) ?? 0; seen.set(f.path, n + 1); key.set(f.id, f.path + '#' + n) }
+  return key
+}
+
+// Whether something of feature [id] (an asset, a sketch) is out of what scene [s] shows:
+// inside a feature taken out, or outside the one shown alone.
+function outOf(s, id) {
+  const parent = new Map(s.features.map(f => [f.id, f.parent]))
+  for (let f = id; f; f = parent.get(f) ?? 0) {
+    if (f == s.solo) return false
+    if (s.hidden.includes(f)) return true
+  }
+  return s.solo != 0
+}
+
 // The model as the command last wrote it, asked of the kernel and made ready to draw.
-async function take(name, view) {
+// What was asked meanwhile replaces it, before its shader is made. When the model was
+// built again, what is alone, taken out and picked out is found again by its key, and
+// asked for again if the numbers moved.
+let viewing = 0
+// [basis]: the features the numbers in [view] are of.
+async function take(name, view, basis = scene?.name == name ? scene.features : null) {
   const mine = ++taking
+  const stale = () => mine != taking || current != name || viewed() != view
+  const before = basis && keys(basis)
+  viewing++; status()
   try {
     const r = await fetch('/scene' + about(name, view))
+    if (stale()) return
     if (!r.ok) throw new Error((await r.text()) || name + ' could not be read.')
     const s = await r.json()
+    if (stale()) return
+    if (before) {
+      const now = new Map([...keys(s.features)].map(([id, key]) => [key, id])), again = id => now.get(before.get(id)) ?? 0
+      const moved = { solo: solo && again(solo), hidden: new Set([...hidden].map(again).filter(Boolean)), feature: feature && again(feature) }
+      const was = viewed()
+      solo = moved.solo; hidden = moved.hidden; feature = moved.feature
+      if (viewed() != was) return take(name, viewed(), s.features)
+    }
     const found = await (await fetch('/edges' + about(name))).json()
+    if (stale()) return
     const ready = held(s, name, view)
-    await Promise.all([readied(ready), assembled(ready, s.assets)])
+    await Promise.all([readied(ready), assembled(ready, s.assets.filter(a => !outOf(s, a.feature)))])
     // a later one was asked for meanwhile, or the person moved on
-    if (mine != taking || current != name || viewed() != view) { dropped(ready); return }
+    if (stale()) { dropped(ready); return }
     dropped(model)
     model = ready; scene = s; edges = found
     still = null
@@ -897,6 +935,16 @@ async function take(name, view) {
     if (!fitted.has(name)) { fitted.add(name); fit() }
     lay(); panel(); changed()
   } catch (e) { if (mine == taking && current == name) { said = e.message; status() } }
+  finally { viewing--; status() }
+}
+
+// What is shown changed by the person: asked for a moment later, so that quick clicks on
+// the switches make one request, not one each.
+let retaking = 0
+function retake() {
+  clearTimeout(retaking)
+  const name = current
+  retaking = setTimeout(() => { if (current == name) take(name, viewed()) }, 180)
 }
 
 // A feature shown alone, or with 0 the whole model again. A feature taken out is put back
@@ -904,7 +952,7 @@ async function take(name, view) {
 function alone(f) {
   if (!current || f == solo) return
   solo = f; hidden.delete(f)
-  take(current, viewed())
+  retake()
   panel()
 }
 
@@ -915,7 +963,7 @@ function shown(f) {
   else if (!hidden.delete(f)) hidden.add(f)
   if (gone(feature)) { feature = 0; face = -1 }
   picked = null
-  take(current, viewed())
+  retake()
   lay(); panel(); changed()
 }
 
@@ -1029,6 +1077,7 @@ const ms = t => `${t < 10 ? t.toFixed(1) : Math.round(t)} ms`
 function status() {
   $('status').replaceChildren(...[
     (building || asking > 0) && el('div', {}, 'Building…'),
+    !building && !asking && viewing > 0 && el('div', {}, 'Making what is shown…'),
     said && el('pre', { id: 'said' }, said),
     !said && scene && el('div', {}, `${scene.nodes} nodes, ${scene.selects} selects` + (took == null ? '' : ` · ${ms(took)} a picture`)),
     // an asset whose file could not be read

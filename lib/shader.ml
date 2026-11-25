@@ -76,7 +76,7 @@ let model ?(least = 240) (p : P.t) root =
     | 2 -> reg p.a.(i)
     | _ -> Printf.sprintf "r%d" i
   in
-  let rec face n = match p.kind.(n) with 0 -> string_of_int p.fixed.(n) | 1 when p.keep.(n) >= 0 -> face p.inputs.(n).(p.keep.(n)) | 1 when p.keep.(n) = -2 -> "-1" | _ -> Printf.sprintf "f%d" n in
+  let rec face n = match p.kind.(n) with 0 -> string_of_int p.fixed.(n) | 1 when p.keep.(n) >= 0 -> face p.inputs.(n).(p.keep.(n)) | 1 when p.keep.(n) = -2 -> "-1" | _ -> Printf.sprintf "fc%d" n in
   let rec feat n = match p.kind.(n) with 1 when p.keep.(n) >= 0 -> feat p.inputs.(n).(p.keep.(n)) | 2 -> Printf.sprintf "q%d" n | _ -> string_of_int p.feature.(n) in
   let ops n =
     for i = p.first.(n) to p.last.(n) do
@@ -118,20 +118,20 @@ let model ?(least = 240) (p : P.t) root =
       | 1 ->
           Array.iter node ins;
           ops n;
-          if p.keep.(n) = -1 then line "let f%d: i32 = %s;" n (made n)
+          if p.keep.(n) = -1 then line "let fc%d: i32 = %s;" n (made n)
           else if p.keep.(n) = -3 then begin
             (* joined: the inputs' face where they agree, else one made from them *)
             let same = String.concat " && " (List.map (fun i -> Printf.sprintf "%s == %s" (face ins.(0)) (face i)) (List.tl (Array.to_list ins))) in
-            line "let f%d: i32 = select(%s, %s, %s);" n (made n) (face ins.(0)) (if same = "" then "true" else same)
+            line "let fc%d: i32 = select(%s, %s, %s);" n (made n) (face ins.(0)) (if same = "" then "true" else same)
           end
       | _ when link n -> chain n
       | _ ->
           node ins.(0);
           let r = p.last.(n) in
-          line "var r%d: f32; var f%d: i32; var q%d: i32;" r n n;
+          line "var r%d: f32; var fc%d: i32; var q%d: i32;" r n n;
           let side k () =
             node ins.(k);
-            line "r%d = %s; f%d = %s; q%d = %s;" r (reg p.last.(ins.(k))) n (face ins.(k)) n (feat ins.(k))
+            line "r%d = %s; fc%d = %s; q%d = %s;" r (reg p.last.(ins.(k))) n (face ins.(k)) n (feat ins.(k))
           in
           block (Printf.sprintf "if (%s <= 0.0)" (reg p.last.(ins.(0)))) (side 1);
           block "else" (side 2));
@@ -163,7 +163,7 @@ let model ?(least = 240) (p : P.t) root =
       node part;
       (* the chain so far, under the names the guard reads it by *)
       if not (known below) then begin
-        line "let r%d = %s; let f%d = %sf; let q%d = %sq;" p.last.(below) c below c below c;
+        line "let r%d = %s; let fc%d = %sf; let q%d = %sq;" p.last.(below) c below c below c;
         know below
       end;
       node ins.(0);
@@ -179,7 +179,7 @@ let model ?(least = 240) (p : P.t) root =
           block (Printf.sprintf "if ((g%d.%c & %uu) != 0u)" (g / per_texel) "xyzw".[g mod per_texel / 32] (1 lsl (g mod 32))) (fun () -> List.iter one stretch)
         end)
       stretches;
-    line "let r%d = %s; let f%d = %sf; let q%d = %sq;" p.last.(top) c top c top c
+    line "let r%d = %s; let fc%d = %sf; let q%d = %sq;" p.last.(top) c top c top c
   in
   node root;
   let words = texels !count in
