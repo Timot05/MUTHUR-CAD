@@ -93,11 +93,16 @@ let make spans =
     sk;
   let chords = Array.concat (Array.to_list (Array.map (fun s -> Array.init 8 (fun k -> (along s (float_of_int k /. 8.), along s (float_of_int (k + 1) /. 8.), s.name))) sk)) in
   let m = Array.length chords in
-  let side a b c = cross (b -- a) (c -- a) in
+  (* whether c and d are on opposite sides of the line through a and b, by more than
+     rounding: two chords of one straight span are on one line but for that *)
+  let apart a b c d =
+    let side c = cross (b -- a) (c -- a) and least = 1e-12 *. size *. size in
+    Float.min (side c) (side d) < -.least && Float.max (side c) (side d) > least
+  in
   for i = 0 to m - 1 do
     for j = i + 2 to m - 1 do
       let p, p', name = chords.(i) and q, q', name' = chords.(j) in
-      if (not (i = 0 && j = m - 1)) && side p p' q *. side p p' q' < 0. && side q q' p *. side q q' p' < 0. then fail "%s crosses %s" name name'
+      if (not (i = 0 && j = m - 1)) && apart p p' q q' && apart q q' p p' then fail "%s crosses %s" name name'
     done
   done;
   sk
