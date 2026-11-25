@@ -7,12 +7,94 @@ let num v = Json.Num v
 let int v = Json.Num (float_of_int v)
 let vec a = Json.Arr (Array.to_list (Array.map num a))
 
-(* The model as it was last built, and the graph to show: the whole of it, or with [solo]
-   its feature of that id alone. *)
-let shown name solo =
+(* What of a model is shown: the whole of it, or with [solo] its feature of that id alone;
+   and in that, the features [hidden] taken out, with all made inside them. On the
+   command line, "3" or "3:5,8" (feature 3 alone, without 5 and 8); "0" is the whole. *)
+type view = { solo : int; hidden : int list }
+
+let view_of s =
+  let wrong () = failwith "a view is <feature> or <feature>:<hidden>,<hidden>" in
+  let id v = match int_of_string_opt v with Some f when f >= 0 -> f | _ -> wrong () in
+  let ids s = List.filter (( <> ) 0) (List.map id (List.filter (( <> ) "") (String.split_on_char ',' s))) in
+  match String.split_on_char ':' s with
+  | [ solo ] -> { solo = id solo; hidden = [] }
+  | [ solo; hidden ] -> { solo = id solo; hidden = List.sort_uniq compare (ids hidden) }
+  | _ -> wrong ()
+
+(* Where the gates' table of what is shown is written: Place's file for the feature
+   alone, its name followed by the features taken out (music.plexi.graph.0-5-8.gates). *)
+let gates name view =
+  let at = Place.gates name view.solo in
+  if view.hidden = [] then at else Filename.remove_extension at ^ String.concat "" (List.map (Printf.sprintf "-%d") view.hidden) ^ ".gates"
+
+(* Nodes made in this run are numbered above every node of the model read back, whose
+   numbers were given in the run that built it: the compiler knows a node by its number. *)
+let numbered_above (graph : Graph.t) =
+  let seen = Hashtbl.create 256 and seen_e = Hashtbl.create 256 in
+  let rec expr (e : Expr.t) =
+    if not (Hashtbl.mem seen_e e.id) then begin
+      Hashtbl.replace seen_e e.id ();
+      Expr.counter := max !Expr.counter e.id;
+      match e.node with Expr.U (_, a) -> expr a | B (_, a, b) -> expr a; expr b | X _ | K _ | Slot _ -> ()
+    end
+  in
+  let rec go (g : Graph.t) =
+    if not (Hashtbl.mem seen g.id) then begin
+      Hashtbl.replace seen g.id ();
+      Graph.counter := max !Graph.counter g.id;
+      match g.node with Graph.Piece p -> expr p.field | Apply a -> expr a.formula; Array.iter go a.inputs | Select s -> go s.guard; go s.le; go s.gt
+    end
+  in
+  go graph
+
+(* The graph without the features [hidden]: where a node of one of them (or of a feature
+   made inside one) is first reached, it is nothing, a field far outside everything, and
+   what is above it is made again over that. A union then has one part fewer, a cut does
+   not cut, and a body cut into is gone with its cuts. A feature shown alone is shown
+   though one around it is taken out. *)
+let without (m : Emit.t) ~solo hidden (graph : Graph.t) =
+  if hidden = [] then graph
+  else begin
+    numbered_above m.built.graph;
+    let parent f = match List.find_opt (fun (x : Graph.feature) -> x.fid = f) m.built.features with Some x -> x.parent | None -> 0 in
+    let gone_memo = Hashtbl.create 64 in
+    let rec gone f =
+      match Hashtbl.find_opt gone_memo f with
+      | Some v -> v
+      | None ->
+          let v = f <> 0 && f <> solo && (List.mem f hidden || gone (parent f)) in
+          Hashtbl.replace gone_memo f v;
+          v
+    in
+    let nothing = Graph.raw_piece "" (Expr.const 1e4) in
+    let memo = Hashtbl.create 256 in
+    let rec go (g : Graph.t) =
+      match Hashtbl.find_opt memo g.id with
+      | Some v -> v
+      | None ->
+          let v =
+            if gone g.feature then nothing
+            else
+              match g.node with
+              | Piece _ -> g
+              | Apply a ->
+                  let inputs = Array.map go a.inputs in
+                  if Array.for_all2 ( == ) inputs a.inputs then g else { (Graph.raw_apply ~naming:a.naming ~lip:g.lip a.formula (Array.to_list inputs)) with feature = g.feature }
+              | Select s ->
+                  let guard = go s.guard and le = go s.le and gt = go s.gt in
+                  if guard == s.guard && le == s.le && gt == s.gt then g else { (Graph.select ~jump:s.step ~smooth:s.smooth ~guard ~le ~gt ()) with feature = g.feature }
+          in
+          Hashtbl.replace memo g.id v;
+          v
+    in
+    go graph
+  end
+
+(* The model as it was last built, and the graph to show. *)
+let shown name view =
   let m = try Emit.read ~kernel:(Place.kernel ()) (Place.model name) with Sys_error _ -> failwith (Printf.sprintf "%s is not open: mk52 view %s" name name) in
-  let graph = if solo = 0 then m.built.graph else match List.find_opt (fun (f : Graph.feature) -> f.fid = solo) m.built.features with Some { result = Some g; _ } -> g | _ -> failwith "no such feature" in
-  (m, graph)
+  let graph = if view.solo = 0 then m.built.graph else match List.find_opt (fun (f : Graph.feature) -> f.fid = view.solo) m.built.features with Some { result = Some g; _ } -> g | _ -> failwith "no such feature" in
+  (m, without m ~solo:view.solo view.hidden graph)
 
 (* The features with a node in the graph, and their parents, in the order of the code. *)
 let features_of (m : Emit.t) =
@@ -95,15 +177,15 @@ let asset (a : Asset.placed) =
 (* How the page draws the model: its box, its features and its sketches, and the model
    itself as a shader of its own, with where that shader's gates are entered (Shader): a
    file of 32-bit words, little-endian, which the page asks the server for. *)
-let scene name solo =
-  let m, graph = shown name solo in
+let scene name view =
+  let m, graph = shown name view in
   let p = Prog.compile graph in
   let s = Shader.model p p.root in
   let g = Shader.decisions p (Prog.ctx p) s ~lo:m.lo ~hi:m.hi in
-  Out_channel.with_open_bin (Place.gates name solo) (fun oc -> output_bytes oc g.table);
+  Out_channel.with_open_bin (gates name view) (fun oc -> output_bytes oc g.table);
   let faces = faces_of m p graph in
   Json.Obj
-    [ ("name", Json.Str name); ("solo", int solo); ("lo", vec m.lo); ("hi", vec m.hi); ("step", num (1. /. graph.lip)); ("nodes", int p.nodes); ("selects", int (Prog.selects p));
+    [ ("name", Json.Str name); ("solo", int view.solo); ("hidden", Json.Arr (List.map int view.hidden)); ("lo", vec m.lo); ("hi", vec m.hi); ("step", num (1. /. graph.lip)); ("nodes", int p.nodes); ("selects", int (Prog.selects p));
       ("root", Json.Str (Sys.getcwd ()));
       ("features", Json.Arr (List.map (fun f -> feature ~faces:(faces f) f) (features_of m)));
       ("sketches", Json.Arr (List.map sketch m.built.sketches));
@@ -114,8 +196,8 @@ let scene name solo =
 (* The model cut into regions for the page's other way of drawing (Region), made when
    that is asked for: each shader's text with how many operations it is, and each
    region as seven numbers, where its box starts and ends and which shader is its own. *)
-let regions name solo most =
-  let m, graph = shown name solo in
+let regions name view most =
+  let m, graph = shown name view in
   let p = Prog.compile graph in
   let r = Region.cut ~most p (Prog.ctx p) ~lo:m.lo ~hi:m.hi in
   Json.Obj
@@ -125,8 +207,8 @@ let regions name solo most =
 
 (* What the ray from o along d hits: sphere tracing inside the model's box, as the
    shader does, then the full evaluation at the point reached. *)
-let pick name solo o d =
-  let m, graph = shown name solo in
+let pick name view o d =
+  let m, graph = shown name view in
   let p = Prog.compile graph in
   let c = Prog.ctx p and whole = Prog.whole p in
   let tn = ref 0. and tf = ref infinity in

@@ -10,7 +10,8 @@
      GET  /                          the page
      GET  /look                      what is open, each project's functions, the model to
                                      bring to the front, and what the last build said
-     GET  /scene?name=&solo=         how a model is drawn (mk52 scene)
+     GET  /scene?name=&solo=&hide=   how a model is drawn (mk52 scene), with the
+                                     features in hide (5,8) taken out
      GET  /gates?name=&solo=         where its shader's gates are entered: the table
      GET  /regions?name=&solo=&most= the model cut into at most so many regions, a shader
                                      each (mk52 regions)
@@ -145,17 +146,25 @@ let answer port r =
     n
   in
   let solo () = match int_of_string_opt (param "solo") with Some f when f >= 0 -> f | _ -> refuse "400 Bad Request" "solo is a feature's number" in
+  (* the features taken out of what is shown: hide=5,8, or none *)
+  let hidden () =
+    match List.assoc_opt "hide" r.query with
+    | None | Some "" -> []
+    | Some v -> List.sort_uniq compare (List.map (fun f -> match int_of_string_opt f with Some f when f > 0 -> f | _ -> refuse "400 Bad Request" "hide is a list of features' numbers") (String.split_on_char ',' v))
+  in
+  (* what is shown, as the command takes it: 3, or 3:5,8 *)
+  let view () = string_of_int (solo ()) ^ match hidden () with [] -> "" | h -> ":" ^ String.concat "," (List.map string_of_int h) in
   let json = "application/json" in
   let asked args = match run args with true, printed, _ -> (json, printed) | false, printed, err -> refuse "500 Internal Server Error" (String.trim (printed ^ err)) in
   let file path = try read path with Sys_error _ -> refuse "404 Not Found" "not there" in
   match (r.verb, r.path) with
   | "GET", "/" -> ("text/html; charset=utf-8", file (Place.page ()))
   | "GET", "/look" -> (json, Json.to_string (look ()))
-  | "GET", "/scene" -> asked [ "scene"; name (); string_of_int (solo ()) ]
-  | "GET", "/gates" -> ("application/octet-stream", file (Place.gates (name ()) (solo ())))
+  | "GET", "/scene" -> asked [ "scene"; name (); view () ]
+  | "GET", "/gates" -> ("application/octet-stream", file (Scene.gates (name ()) { solo = solo (); hidden = hidden () }))
   | "GET", "/regions" ->
       let most = match int_of_string_opt (param "most") with Some n when n >= 1 && n <= 4096 -> n | _ -> refuse "400 Bad Request" "most is a number of regions" in
-      asked [ "regions"; name (); string_of_int (solo ()); string_of_int most ]
+      asked [ "regions"; name (); view (); string_of_int most ]
   | "GET", "/asset" ->
       let id = param "id" in
       if id = "" || not (String.for_all (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false) id) then refuse "400 Bad Request" "not an asset's number";
@@ -164,7 +173,7 @@ let answer port r =
   | "GET", "/pick" ->
       let ray = String.split_on_char ',' (param "ray") in
       if List.length ray <> 6 || List.exists (fun v -> float_of_string_opt v = None) ray then refuse "400 Bad Request" "ray is ox,oy,oz,dx,dy,dz";
-      asked ([ "pick"; name (); string_of_int (solo ()) ] @ ray)
+      asked ([ "pick"; name (); view () ] @ ray)
   | "POST", ("/view" | "/close" | "/extract") ->
       let ok, printed, err = run [ String.sub r.path 1 (String.length r.path - 1); name () ] in
       (json, Json.to_string (Json.Obj [ ("ok", Json.Bool ok); ("said", Json.Str (if ok then "" else String.trim (printed ^ err))) ]))

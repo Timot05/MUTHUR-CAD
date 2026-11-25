@@ -197,11 +197,11 @@ let () =
         let out = match opt "out" with Some o -> o | None -> Place.picture m.name in
         Out_channel.with_open_bin out (fun oc -> output_string oc png);
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
-    | "scene" :: name :: solo -> print_endline (Json.to_string (Scene.scene name (match solo with [ f ] -> int_of_string f | _ -> 0)))
-    | [ "regions"; name; solo; most ] -> print_endline (Json.to_string (Scene.regions name (int_of_string solo) (int_of_string most)))
+    | "scene" :: name :: solo -> print_endline (Json.to_string (Scene.scene name (match solo with [ v ] -> Scene.view_of v | _ -> Scene.view_of "0")))
+    | [ "regions"; name; solo; most ] -> print_endline (Json.to_string (Scene.regions name (Scene.view_of solo) (int_of_string most)))
     | "pick" :: name :: solo :: ray -> (
         match List.map float_of_string ray with
-        | [ ox; oy; oz; dx; dy; dz ] -> print_endline (Json.to_string (Scene.pick name (int_of_string solo) [| ox; oy; oz |] [| dx; dy; dz |]))
+        | [ ox; oy; oz; dx; dy; dz ] -> print_endline (Json.to_string (Scene.pick name (Scene.view_of solo) [| ox; oy; oz |] [| dx; dy; dz |]))
         | _ -> failwith "pick <model> <feature> ox oy oz dx dy dz")
     | [ "new"; project; file ] ->
         let path = Project.create project file in

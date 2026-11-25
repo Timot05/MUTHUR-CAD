@@ -9,73 +9,125 @@
      function the kernel wrote for the model (lib/shader.ml), with WebGPU. The page holds
      no model and does no geometry: what is drawn, and what a click hit, it asks. -->
 <style>
-  /* An instrument's side panel: cool neutral greys, one blue for what is picked out. */
-  :root { color-scheme: light dark; --panel: #f7f8f9; --raise: #ffffff; --ink: #1b1d21; --soft: #676d76; --line: #dfe2e7; --hover: #eceef2; --accent: #2458c5; --view: #e6e8ec; --bad: #c0392b; }
-  @media (prefers-color-scheme: dark) { :root { --panel: #1d1f23; --raise: #25282d; --ink: #e8eaed; --soft: #9aa0a9; --line: #32363c; --hover: #2a2d33; --accent: #86aaf2; --view: #131417; --bad: #e0705f; } }
+  /* ---- The design system ----
+     Square and ruled: sections, groups and boxes are separated by one black line, and
+     nothing is rounded or shadowed. Paper and ink, greys between them for what is said
+     quietly, and one blue for what is picked out. Everything below is written in these
+     tokens; a new part of the page takes them, not colours or sizes of its own. */
+  :root {
+    color-scheme: light dark;
+    /* colour */
+    --paper: #ffffff;           /* the panels, the boxes over the picture */
+    --view: #eef0f2;            /* behind the model */
+    --ink: #111111;             /* words, and what is pressed */
+    --ink-2: #5d6168;           /* said quietly: counts, places in the code */
+    --ink-3: #a3a7ad;           /* out of the way: what is taken out */
+    --rule: #111111;            /* the line between sections */
+    --hover: #f0f1f3;
+    --accent: #1f5fd6;          /* picked out */
+    --accent-wash: #e3ecfb;
+    --bad: #b3261e;
+    /* type */
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --text: 13px;
+    --small: 11px;
+    /* space */
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+    --head: 34px;               /* a section's header */
+    --line-h: 26px;             /* a row */
+    --bar: 30px;                /* a button over the picture */
+    --side: 316px;              /* the panel beside the picture */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #18191b; --view: #0e0f10; --ink: #ececec; --ink-2: #9a9ea5; --ink-3: #5a5e64;
+      --rule: #000000; --hover: #222427; --accent: #7aa5f5; --accent-wash: #1d2a42; --bad: #ec6a5e;
+    }
+  }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   /* the page itself never scrolls: it is the window, and only the lists inside it move */
   html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
-  body { display: flex; background: var(--view); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; }
-  aside { width: 308px; flex: none; display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--panel); border-right: 1px solid var(--line); }
+  body { display: flex; background: var(--view); color: var(--ink); font: var(--text)/1.4 var(--sans); }
+  aside { width: var(--side); flex: none; display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--paper); border-right: 1px solid var(--rule); }
   main { flex: 1; position: relative; min-width: 0; height: 100%; overflow: hidden; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; outline: none; }
   canvas:active { cursor: grabbing; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
   /* ---- A section: a header that opens and closes it, and a body that scrolls ---- */
-  .panel { display: flex; flex-direction: column; flex: none; min-height: 0; max-height: 34%; border-bottom: 1px solid var(--line); }
+  .panel { display: flex; flex-direction: column; flex: none; min-height: 0; max-height: 34%; border-bottom: 1px solid var(--rule); }
   .panel.open.fill { flex: 1 1 0; max-height: none; }
-  .head { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 9px; width: 100%; height: 36px; flex: none; padding: 0 14px; font-weight: 600; cursor: pointer; }
+  .head { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--s2); width: 100%; height: var(--head); flex: none; padding: 0 var(--s3); font-size: var(--small); font-weight: 650; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+  .panel.open > .head { border-bottom: 1px solid var(--rule); }
   .head:hover { background: var(--hover); }
-  .sum { margin-left: auto; min-width: 0; font-weight: 400; color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .chev { width: 7px; height: 7px; flex: none; border-right: 1.5px solid var(--soft); border-bottom: 1.5px solid var(--soft); transform: rotate(-45deg); }
+  .sum { margin-left: auto; min-width: 0; font: var(--small) var(--mono); letter-spacing: 0; text-transform: none; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chev { width: 6px; height: 6px; flex: none; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); color: var(--ink-2); }
   .open > .head .chev, .row.open > .chev { transform: translateY(-2px) rotate(45deg); }
-  .body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 14px 12px; }
+  .body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--s1) 0 var(--s3); }
   .panel:not(.open) .body { display: none; }
   @media (prefers-reduced-motion: no-preference) { .chev { transition: transform .12s; } }
-  .empty { margin: 4px 0; color: var(--soft); }
+  .empty { margin: var(--s2) var(--s3); color: var(--ink-2); }
 
-  /* ---- Rows: one line each ---- */
-  .row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; margin: 0 -8px; border-radius: 6px; cursor: pointer; }
+  /* ---- Rows: one line each, the width of the panel ---- */
+  .row { position: relative; display: flex; align-items: center; gap: var(--s2); min-height: var(--line-h); padding: 0 var(--s3); cursor: pointer; }
   .row:hover { background: var(--hover); }
-  .row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-  .row.front .name { font-weight: 600; }
+  .row.on { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
+  .row.front .name { font-weight: 650; }
   .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row.face .name, .row .meta { color: var(--soft); }
+  .row.face .name, .row .meta { color: var(--ink-2); }
   .row.face.on .name { color: var(--ink); }
-  .row .meta { font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  a { color: var(--soft); font-size: 12px; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .row .meta { font: var(--small) var(--mono); white-space: nowrap; }
+  .row.out .name, .row.out .meta { color: var(--ink-3); }
+  .row.out { cursor: default; }
+  .row.whole { border-bottom: 1px solid var(--rule); margin-bottom: var(--s1); }
+  a { color: var(--ink-2); font: var(--small) var(--mono); text-decoration: none; white-space: nowrap; }
   a:hover { color: var(--accent); text-decoration: underline; }
   /* a quiet action: words alone */
-  .text { all: unset; box-sizing: border-box; padding: 1px 5px; border-radius: 4px; color: var(--soft); font-size: 12px; white-space: nowrap; cursor: pointer; }
+  .text { all: unset; box-sizing: border-box; padding: 1px var(--s1); color: var(--ink-2); font-size: var(--small); white-space: nowrap; cursor: pointer; }
   .text:hover { color: var(--ink); background: var(--hover); }
   .text.on { color: var(--accent); }
   /* a row's actions lie over its right end, so a name has the whole row; they show when
      the row is under the pointer, reached by keyboard, or one of them is in use */
-  .acts { position: absolute; right: 4px; top: 3px; bottom: 3px; display: none; align-items: center; gap: 4px; padding: 0 4px 0 8px; border-radius: 5px; background: var(--panel); }
+  .acts { position: absolute; right: var(--s2); top: 2px; bottom: 2px; display: none; align-items: center; gap: var(--s1); padding: 0 var(--s1) 0 var(--s2); background: var(--paper); }
   .row:hover .acts, .row:focus-within .acts, .acts:has(.on) { display: flex; }
-  :is(.head, .row, .text, a, #viewbar button):focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row.on .acts { background: var(--accent-wash); }
+  .row.feat .acts { right: calc(var(--s3) + 2 * 22px + var(--s1)); }
+  /* a row's switches: small squares that are always there, ink when on */
+  .tog { all: unset; box-sizing: border-box; flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin-right: calc(-1 * var(--s1)); color: var(--ink-3); cursor: pointer; }
+  .tog + .tog { margin-left: calc(-1 * var(--s1)); }
+  .tog svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+  .tog svg .fill { fill: currentColor; stroke: none; }
+  .tog:hover { color: var(--ink); background: var(--hover); }
+  .tog.shown { color: var(--ink-2); }   /* the usual: said quietly */
+  .tog.hidden { color: var(--ink); }    /* taken out: the one thing on a faint row that is not */
+  .tog.alone.on { color: var(--accent); }
+  .tog.faint { opacity: .4; }
 
   /* ---- Under the lists: what is being built, what went wrong, how large the model is ---- */
-  #status { flex: none; padding: 9px 14px; color: var(--soft); font-variant-numeric: tabular-nums; }
+  #status { flex: none; padding: var(--s2) var(--s3); color: var(--ink-2); font: var(--small)/1.5 var(--mono); }
   #status:empty { display: none; }
-  #said, #status .bad { max-height: 170px; margin: 0; overflow: auto; color: var(--bad); white-space: pre-wrap; font: 12px/1.35 ui-monospace, monospace; user-select: text; }
+  #said, #status .bad { max-height: 170px; margin: 0; overflow: auto; color: var(--bad); white-space: pre-wrap; font: var(--small)/1.4 var(--mono); user-select: text; }
 
-  /* ---- Over the picture ---- */
-  #viewbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); gap: 2px; padding: 3px; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 10px rgba(0, 0, 0, .10); }
-  #viewbar button { all: unset; box-sizing: border-box; height: 26px; padding: 0 11px; border-radius: 6px; color: var(--soft); white-space: nowrap; cursor: pointer; }
+  /* ---- Over the picture: boxes ruled in black ---- */
+  .box { background: var(--paper); border: 1px solid var(--rule); }
+  #viewbar { position: absolute; left: 50%; bottom: var(--s4); transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); width: max-content; max-width: calc(100% - 2 * var(--s4)); }
+  #viewbar .group { display: flex; background: var(--paper); border: 1px solid var(--rule); }
+  #viewbar button { all: unset; box-sizing: border-box; height: var(--bar); padding: 0 var(--s3); font-size: 12px; color: var(--ink-2); white-space: nowrap; cursor: pointer; }
+  #viewbar button + button { border-left: 1px solid var(--rule); }
   #viewbar button:hover { color: var(--ink); background: var(--hover); }
-  #viewbar button[aria-pressed="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  #viewbar button:disabled { opacity: .45; pointer-events: none; }
-  #viewbar hr { width: 1px; height: 18px; margin: 4px 5px; border: 0; background: var(--line); }
-  #clicked { position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px); display: flex; align-items: baseline; gap: 10px; padding: 6px 11px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .08); }
-  #clicked b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #clicked span { color: var(--soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #viewbar button[aria-pressed="true"] { color: var(--paper); background: var(--ink); }
+  #viewbar button:disabled { color: var(--ink-3); pointer-events: none; }
+  #clicked { position: absolute; left: var(--s4); top: var(--s4); max-width: calc(100% - 2 * var(--s4)); display: flex; align-items: baseline; gap: var(--s3); padding: 6px var(--s3); }
+  #clicked b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #clicked span { color: var(--ink-2); white-space: nowrap; font: var(--small) var(--mono); }
   /* what a map's colours stand for: a bar of them, its marks, and a line of words */
-  #legend { position: absolute; right: 12px; top: 12px; width: 260px; padding: 9px 11px 8px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .08); color: var(--soft); font-size: 12px; font-variant-numeric: tabular-nums; }
-  #legend i { display: block; height: 10px; border-radius: 3px; }
-  #legend div { display: flex; justify-content: space-between; margin: 3px 0 2px; }
-  #notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--soft); text-align: center; pointer-events: none; }
+  #legend { position: absolute; right: var(--s4); top: var(--s4); width: 260px; padding: var(--s2) var(--s3); color: var(--ink-2); font: var(--small) var(--mono); }
+  #legend i { display: block; height: 10px; border: 1px solid var(--rule); }
+  #legend div { display: flex; justify-content: space-between; margin: var(--s1) 0 2px; }
+  #notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--ink-2); text-align: center; pointer-events: none; }
 </style>
 
 <aside>
@@ -87,23 +139,29 @@
 <main>
   <canvas tabindex="0" aria-label="The model"></canvas>
   <div id="notice" hidden></div>
-  <div id="clicked" hidden></div>
-  <div id="legend" hidden></div>
+  <div id="clicked" class="box" hidden></div>
+  <div id="legend" class="box" hidden></div>
   <div id="viewbar">
-    <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found">Edges</button>
-    <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
-    <button id="showFrames" aria-pressed="true" title="The frames its features sit in">Frames</button>
-    <button id="showAssets" aria-pressed="true" title="What the model shows from outside, each where its code puts it: STEP files and meshes. They are seen only: nothing is cut by them, and a click goes through them.">Assets</button>
-    <button id="faces" aria-pressed="true" title="Each face in a colour of its own, and what is picked out shown. Off: the object alone, in one colour. Drawn by regions, a picture then asks nothing of the model's one large shader.">Faces</button>
-    <hr>
-    <button id="extract" title="Find the model's edges and corners (mk52 extract) and draw them">Find edges</button>
-    <button id="fit" title="Fit the model in the picture (F)">Fit</button>
-    <hr>
-    <button id="regional" aria-pressed="false" title="How the model is drawn. Off: by one shader compiled for the whole of it, which skips at its gates. On: cut into regions, each drawn as its box by a short shader of its own.">Regions</button>
-    <button id="gated" aria-pressed="true" title="Whether the shader skips what its gates say cannot matter. Off, every gate is entered everywhere: the time a picture then takes is what skipping saves.">Gates</button>
-    <button id="mapCost" aria-pressed="false" title="In place of the picture: what each pixel cost, in whole evaluations of the model">Cost</button>
-    <button id="mapSteps" aria-pressed="false" title="In place of the picture: how many times each pixel's ray evaluated the model">Steps</button>
-    <button id="mapShare" aria-pressed="false" title="In place of the picture: how much of the model an evaluation ran, along each pixel's ray">Share</button>
+    <div class="group">
+      <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found">Edges</button>
+      <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
+      <button id="showFrames" aria-pressed="true" title="The frames its features sit in">Frames</button>
+      <button id="showAssets" aria-pressed="true" title="What the model shows from outside, each where its code puts it: STEP files and meshes. They are seen only: nothing is cut by them, and a click goes through them.">Assets</button>
+      <button id="faces" aria-pressed="true" title="Each face in a colour of its own, and what is picked out shown. Off: the object alone, in one colour. Drawn by regions, a picture then asks nothing of the model's one large shader.">Faces</button>
+    </div>
+    <div class="group">
+      <button id="extract" title="Find the model's edges and corners (mk52 extract) and draw them">Find edges</button>
+      <button id="fit" title="Fit the model in the picture (F)">Fit</button>
+    </div>
+    <div class="group">
+      <button id="regional" aria-pressed="false" title="How the model is drawn. Off: by one shader compiled for the whole of it, which skips at its gates. On: cut into regions, each drawn as its box by a short shader of its own.">Regions</button>
+      <button id="gated" aria-pressed="true" title="Whether the shader skips what its gates say cannot matter. Off, every gate is entered everywhere: the time a picture then takes is what skipping saves.">Gates</button>
+    </div>
+    <div class="group">
+      <button id="mapCost" aria-pressed="false" title="In place of the picture: what each pixel cost, in whole evaluations of the model">Cost</button>
+      <button id="mapSteps" aria-pressed="false" title="In place of the picture: how many times each pixel's ray evaluated the model">Steps</button>
+      <button id="mapShare" aria-pressed="false" title="In place of the picture: how much of the model an evaluation ran, along each pixel's ray">Share</button>
+    </div>
   </div>
 </main>
 
@@ -119,9 +177,10 @@ const canvas = document.querySelector('canvas')
 // The design's projects with their functions, the models that are open, the one in front
 // (`scene`: it as it is drawn, null until its first shader is ready), and what is picked
 // out in it: a feature (0: none), a face by the shader's number (-1: none), a feature
-// shown alone (0: the whole model), and the last point clicked.
+// shown alone (0: the whole model), the features taken out of what is shown, and the
+// last point clicked.
 let projects = [], opened = [], current = null, scene = null, edges = null
-let feature = 0, face = -1, solo = 0, picked = null
+let feature = 0, face = -1, solo = 0, picked = null, hidden = new Set()
 const show = { edges: true, sketches: true, frames: true, assets: true }
 let said = '', building = false, asking = 0, took = null
 // what was last seen of the folder: the model in front as the command wrote it, and the
@@ -495,7 +554,7 @@ function sized() {
 
 // A model as the page holds it: what each way of drawing needs of it, made when that
 // way is first asked for.
-const held = (s, name, alone) => ({ name, alone, source: s.shader, gates: s.gates, compiled: null, regions: null, assets: [] })
+const held = (s, name, view) => ({ name, view, source: s.shader, gates: s.gates, compiled: null, regions: null, assets: [] })
 
 // A mesh by its number, asked of the server the first time: six numbers a vertex (its
 // point, its normal), then the triangles' corners (lib/asset.ml).
@@ -526,7 +585,7 @@ async function assembled(m, assets) {
 // it compiled, and the boxes on the graphics card, six numbers each, sorted by shader so
 // that a shader's are drawn in one go. Asked for once a model.
 const regioned = m => m.cutting ??= (async () => {
-  const answer = await fetch('/regions' + about(m.name, `&solo=${m.alone}&most=${most}`))
+  const answer = await fetch('/regions' + about(m.name, `${m.view}&most=${most}`))
   if (!answer.ok) throw new Error(answer.status == 404 ? 'The page is served by an older mk52 than it is: mk52 stop, then mk52 open, in the design folder.' : await answer.text())
   const made = await answer.json(), count = made.regions.length / 7, shader = r => made.regions[7 * r + 6]
   if (m.gone) return  // the model was let go of meanwhile: its shaders are not compiled for nothing
@@ -585,7 +644,7 @@ async function readied(m) {
 // takes a second or more), and its gates' table a texture.
 async function compiled(m) {
   if (m.compiled) return
-  const table = await (await fetch('/gates' + about(m.name, '&solo=' + m.alone))).arrayBuffer()
+  const table = await (await fetch('/gates' + about(m.name, m.view))).arrayBuffer()
   const module = device.createShaderModule({ code: shared + tabled + m.source + framing + reaching + marching })
   const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
   if (wrong) throw new Error(`The model's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
@@ -945,7 +1004,7 @@ function lay() {
   const line = (a, b, colour, half) => segments.push(...a, ...b, ...colour, half)
   const run = (points, colour, half) => { for (let i = 1; i < points.length; i++) line(points[i - 1], points[i], colour, half) }
   const ink = [0.08, 0.09, 0.11, 1], soft = [0.42, 0.45, 0.52, 0.8], flag = [0.75, 0.22, 0.17, 1]
-  if (scene && show.edges && solo == 0 && edges) {
+  if (scene && show.edges && solo == 0 && !hidden.size && edges) {
     for (const edge of edges.edges) {
       const sharp = (edge.angle ?? edges.sharp_from) >= edges.sharp_from
       for (const piece of edge.pieces) run(Array.from({ length: piece.length / 3 }, (_, i) => piece.slice(3 * i, 3 * i + 3)), sharp ? ink : soft, sharp ? 0.75 : 0.5)
@@ -953,10 +1012,10 @@ function lay() {
     for (const corner of edges.vertices) points.push(...corner.at, ...ink, 6)
     for (const f of edges.flags) points.push(...f.at, ...flag, 10)
   }
-  if (scene && show.sketches) for (const sketch of scene.sketches) for (const loop of sketch.loops) for (const span of loop) run(span.points, [0.55, 0.3, 0.75, 1], 0.8)
+  if (scene && show.sketches) for (const sketch of scene.sketches.filter(s => !gone(s.feature))) for (const loop of sketch.loops) for (const span of loop) run(span.points, [0.55, 0.3, 0.75, 1], 0.8)
   if (scene && show.frames) {
     const long = 0.09 * length(sub(scene.hi, scene.lo))
-    const frames = [[0, { o: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }], ...scene.features.filter(f => f.frame).map(f => [f.id, f.frame])]
+    const frames = [[0, { o: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }], ...scene.features.filter(f => f.frame && !gone(f.id)).map(f => [f.id, f.frame])]
     for (const [id, frame] of frames) {
       const half = id == 0 ? 0.5 : id == feature ? 1.8 : 1.1
       for (const [axis, colour] of [[frame.x, [0.85, 0.25, 0.2, 1]], [frame.y, [0.2, 0.62, 0.3, 1]], [frame.z, [0.2, 0.4, 0.9, 1]]]) line(frame.o, add(frame.o, times(axis, long)), colour, half)
@@ -974,6 +1033,15 @@ function lay() {
 // ---- The server, and through it the kernel ----
 
 const about = (name, more = '') => `?name=${encodeURIComponent(name)}${more}`
+// What of the model in front is shown, as the server is asked for it: a feature alone (or
+// the whole), without the features taken out.
+const viewed = () => `&solo=${solo}&hide=${[...hidden].sort((a, b) => a - b).join(',')}`
+// Whether a feature is out of what is shown: taken out, or made inside one that is (and
+// not inside the one shown alone).
+function gone(id) {
+  for (let f = id; f && f != solo; f = scene?.features.find(x => x.id == f)?.parent ?? 0) if (hidden.has(f)) return true
+  return false
+}
 
 // A command run for the person: what it says when it fails is shown.
 async function command(what, name) {
@@ -1010,31 +1078,31 @@ async function look() {
 // The model in front is taken up again whenever the command has written it anew.
 function follow() {
   const now = folder.open.find(o => o.name == current)?.written ?? null
-  if (now != written) { written = now; if (current) take(current, solo) }
+  if (now != written) { written = now; if (current) take(current, viewed()) }
 }
 
 // A model in front: nothing picked out in it yet, and its whole shown.
 function front(name) {
   if (name == current) return
   current = name; written = null; edges = null
-  feature = 0; face = -1; solo = 0; picked = null
+  feature = 0; face = -1; solo = 0; picked = null; hidden = new Set()
   if (!name) { scene = null; dropped(model); model = null; lay() }
   follow()
   panel()
 }
 
 // The model as the command last wrote it, asked of the kernel and made ready to draw.
-async function take(name, alone) {
+async function take(name, view) {
   const mine = ++taking
   try {
-    const r = await fetch('/scene' + about(name, '&solo=' + alone))
+    const r = await fetch('/scene' + about(name, view))
     if (!r.ok) throw new Error((await r.text()) || name + ' could not be read.')
     const s = await r.json()
     const found = await (await fetch('/edges' + about(name))).json()
-    const ready = held(s, name, alone)
+    const ready = held(s, name, view)
     await Promise.all([readied(ready), assembled(ready, s.assets)])
     // a later one was asked for meanwhile, or the person moved on
-    if (mine != taking || current != name || solo != alone) { dropped(ready); return }
+    if (mine != taking || current != name || viewed() != view) { dropped(ready); return }
     dropped(model)
     model = ready; scene = s; edges = found
     plain = {}; tally = null
@@ -1046,12 +1114,24 @@ async function take(name, alone) {
   } catch (e) { if (mine == taking && current == name) { said = e.message; status() } }
 }
 
-// A feature shown alone, or with 0 the whole model again.
+// A feature shown alone, or with 0 the whole model again. A feature taken out is put back
+// to be shown alone.
 function alone(f) {
   if (!current || f == solo) return
-  solo = f
-  take(current, f)
+  solo = f; hidden.delete(f)
+  take(current, viewed())
   panel()
+}
+
+// A feature taken out of what is shown, or put back; with 0, every feature put back.
+function shown(f) {
+  if (!current || (f == 0 && !hidden.size)) return
+  if (f == 0) hidden.clear()
+  else if (!hidden.delete(f)) hidden.add(f)
+  if (gone(feature)) { feature = 0; face = -1 }
+  picked = null
+  take(current, viewed())
+  lay(); panel(); changed()
 }
 
 function deselect() { feature = 0; face = -1; picked = null; lay(); panel(); changed() }
@@ -1061,7 +1141,7 @@ async function pick(x, y) {
   if (!scene) return
   const name = current, p = placed()
   try {
-    const hit = await (await fetch('/pick' + about(name, `&solo=${solo}&ray=${[...p.eye, ...ray(p, x, y)].join(',')}`))).json()
+    const hit = await (await fetch('/pick' + about(name, `${viewed()}&ray=${[...p.eye, ...ray(p, x, y)].join(',')}`))).json()
     if (current != name) return
     picked = hit.hit ? hit : null
     face = picked?.face_id ?? -1
@@ -1087,6 +1167,7 @@ function changed() {
       camera: { yaw_degrees: camera.yaw * 180 / Math.PI, pitch_degrees: camera.pitch * 180 / Math.PI, distance: camera.distance, target: camera.target },
       feature: chosen ? { name: chosen.path, file: chosen.file, line: chosen.line } : null,
       alone: scene.features.find(f => f.id == solo)?.path ?? null,
+      hidden: scene.features.filter(f => hidden.has(f.id)).map(f => f.path),
     }
     if (picked) state.picked = { at: picked.at, face: picked.face, feature: picked.feature?.path ?? '', file: picked.feature?.file ?? '', line: picked.feature?.line ?? 0 }
     fetch('/state' + about(current), { method: 'POST', body: JSON.stringify(state) }).catch(() => {})
@@ -1099,6 +1180,18 @@ function changed() {
 const source = f => el('a', { href: `vscode://file${encodeURI(scene.root + '/' + f.file)}:${f.line}`, title: `Open ${f.file}:${f.line} in the editor`, onclick: e => e.stopPropagation() }, `${f.file.split('/').pop()}:${f.line}`)
 // A row that is clicked, or reached by keyboard and entered.
 const row = (cls, onclick, ...kids) => el('div', { className: 'row ' + cls, tabIndex: 0, role: 'button', onclick, onkeydown: e => { if (e.key == 'Enter' && e.target == e.currentTarget) onclick(e) } }, kids)
+// A switch of a row that is always there, drawn as a small square mark: pressed, or
+// faint where it is off because of a feature around it.
+const marks = {
+  shown: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8C3.3 4.9 5.5 3.5 8 3.5s4.7 1.4 6.5 4.5c-1.8 3.1-4 4.5-6.5 4.5S3.3 11.1 1.5 8Z"/><rect x="6" y="6" width="4" height="4" class="fill"/></svg>',
+  hidden: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8C3.3 4.9 5.5 3.5 8 3.5s4.7 1.4 6.5 4.5c-1.8 3.1-4 4.5-6.5 4.5S3.3 11.1 1.5 8Z"/><path d="M2.5 13.5 13.5 2.5"/></svg>',
+  alone: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" stroke-dasharray="2 2"/><rect x="5" y="5" width="6" height="6" class="fill"/></svg>',
+}
+const toggle = (mark, title, on, onclick, faint = false) => {
+  const b = el('button', { className: 'tog ' + mark + (on ? ' on' : '') + (faint ? ' faint' : ''), title, ariaLabel: title, ariaPressed: String(on), onclick: e => { e.stopPropagation(); onclick() } })
+  b.innerHTML = marks[mark]
+  return b
+}
 const action = (label, title, on, onclick) => el('button', { className: 'text' + (on ? ' on' : ''), title, onclick: e => { e.stopPropagation(); onclick() } }, label)
 
 function panel() {
@@ -1107,29 +1200,50 @@ function panel() {
     ? opened.map(name => row(name == current ? 'front' : '', () => front(name), el('span', { className: 'name', title: name }, name), el('span', { className: 'acts' }, action('Close', 'Close ' + name, false, () => command('close', name)))))
     : [el('p', { className: 'empty' }, 'Nothing is open. Choose a function below.')]))
 
+  // each project, its files under it, and each file's functions under that; a project or a
+  // file clicked shuts or opens
+  const fold = key => () => { shut.has(key) ? shut.delete(key) : shut.add(key); panel() }
+  const files = functions => {
+    const by = new Map()
+    for (const f of functions) {
+      const file = f.slice(0, f.indexOf('.'))
+      by.has(file) ? by.get(file).push(f) : by.set(file, [f])
+    }
+    return [...by]
+  }
   $('functions').querySelector('.body').replaceChildren(...(projects.length
     ? projects.flatMap(({ project, functions }) => [
-        row(shut.has(project) ? '' : 'open', () => { shut.has(project) ? shut.delete(project) : shut.add(project); panel() }, el('i', { className: 'chev' }), el('span', { className: 'name' }, project), el('span', { className: 'meta' }, functions.length)),
-        ...(shut.has(project) ? [] : functions.map(f => {
-          const name = project + '.' + f
-          return row(opened.includes(name) ? 'front' : '', () => opened.includes(name) ? front(name) : command('view', name), el('span', { className: 'name', style: 'padding-left: 15px', title: name }, f))
+        row(shut.has(project) ? '' : 'open', fold(project), el('i', { className: 'chev' }), el('span', { className: 'name' }, project), el('span', { className: 'meta' }, functions.length)),
+        ...(shut.has(project) ? [] : files(functions).flatMap(([file, fs]) => {
+          const key = project + '/' + file
+          return [
+            row(shut.has(key) ? '' : 'open', fold(key), el('i', { className: 'chev', style: 'margin-left: 15px' }), el('span', { className: 'name', title: file + '.ml' }, file + '.ml'), el('span', { className: 'meta' }, fs.length)),
+            ...(shut.has(key) ? [] : fs.map(f => {
+              const name = project + '.' + f
+              return row(opened.includes(name) ? 'front' : '', () => opened.includes(name) ? front(name) : command('view', name), el('span', { className: 'name', style: 'padding-left: 30px', title: name }, f.slice(file.length + 1)))
+            }))]
         }))])
     : [el('p', { className: 'empty' }, 'No project here yet: mk52 new <project> <file> makes one.')]))
 
   // each feature followed by the ones made inside it, in the order the code made them;
-  // clicking one picks it out (the rest of the model greys), and under it then, its faces
+  // clicking one picks it out (the rest of the model greys), and under it then, its faces.
+  // At its right end, two switches: shown (off: taken out of the model) and alone.
   const rows = []
   if (scene) {
     const ids = new Set(scene.features.map(f => f.id))
     const under = (parent, deep) => scene.features.filter(f => parent == null ? !ids.has(f.parent) : f.parent == parent).forEach(f => {
-      const on = feature == f.id
-      rows.push(row(on ? 'on' : '', () => { face = -1; feature = on ? 0 : f.id; lay(); panel(); changed() },
+      const on = feature == f.id, out = hidden.has(f.id), within = !out && gone(f.id)
+      rows.push(row('feat' + (on ? ' on' : '') + (out || within ? ' out' : ''), () => { if (gone(f.id)) return; face = -1; feature = on ? 0 : f.id; lay(); panel(); changed() },
         el('span', { className: 'name', style: `padding-left: ${12 * deep}px`, title: f.path }, f.name), el('span', { className: 'meta', title: 'Faces it made' }, f.faces.length),
-        el('span', { className: 'acts' }, action('Alone', solo == f.id ? 'Show the whole model again' : 'Show this feature alone', solo == f.id, () => alone(solo == f.id ? 0 : f.id)), source(f))))
+        el('span', { className: 'acts' }, source(f)),
+        toggle(out ? 'hidden' : 'shown', out ? 'Put it back in the model' : within ? 'Out with a feature around it' : 'Take it out of the model', !out, () => shown(f.id), within),
+        toggle('alone', solo == f.id ? 'Show the whole model again' : 'Show this feature alone', solo == f.id, () => alone(solo == f.id ? 0 : f.id))))
       if (on) for (const made of f.faces) rows.push(row('face' + (face == made.id ? ' on' : ''), () => { face = face == made.id ? -1 : made.id; panel(); changed() }, el('span', { className: 'name', style: `padding-left: ${12 * deep + 16}px` }, made.name)))
       under(f.id, deep + 1)
     })
-    rows.push(row(feature == 0 && solo == 0 ? 'front' : '', () => { deselect(); alone(0) }, el('span', { className: 'name' }, 'Whole model')))
+    rows.push(row('feat whole' + (feature == 0 && solo == 0 ? ' front' : ''), () => { deselect(); alone(0) }, el('span', { className: 'name' }, 'Whole model'), hidden.size ? el('span', { className: 'meta' }, `${hidden.size} out`) : null,
+      toggle(hidden.size ? 'hidden' : 'shown', hidden.size ? 'Put every feature back' : 'Every feature is in the model', !hidden.size, () => shown(0)),
+      toggle('alone', solo == 0 ? 'The whole model is shown' : 'Show the whole model again', solo == 0, () => alone(0))))
     under(null, 0)
   }
   $('features').querySelector('.sum').textContent = scene?.name ?? ''
