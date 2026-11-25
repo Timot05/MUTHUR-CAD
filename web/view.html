@@ -93,6 +93,7 @@
     <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found">Edges</button>
     <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
     <button id="showFrames" aria-pressed="true" title="The frames its features sit in">Frames</button>
+    <button id="faces" aria-pressed="true" title="Each face in a colour of its own, and what is picked out shown. Off: the object alone, in one colour. Drawn by regions, a picture then asks nothing of the model's one large shader.">Faces</button>
     <hr>
     <button id="extract" title="Find the model's edges and corners (mk52 extract) and draw them">Find edges</button>
     <button id="fit" title="Fit the model in the picture (F)">Fit</button>
@@ -175,7 +176,7 @@ struct Uniforms {
   size: vec4f,                                          // the picture's width and height, tan of half the view, the march's step
   depth: vec4f,                                         // how near the surface counts as on it, the near plane, the far plane
   cells: vec4i,                                         // the grid's cells along x, y and z
-  chosen: vec4i,                                        // the feature picked out, the last feature made in it, the face picked out (-1: none)
+  chosen: vec4i,                                        // the feature picked out, the last feature made in it, the face picked out (-1: none), whether faces are shown
   project: mat4x4f,                                     // the world to the picture, for what is drawn over the model
   line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel;
                                                         // a map: which one, and the operations in the whole model
@@ -195,17 +196,21 @@ struct Seen { @location(0) colour: vec4f, @builtin(frag_depth) depth: f32 }
 // A point's depth as the projection writes it.
 fn deep(h: vec3f) -> f32 { return clamp(u.depth.z / (u.depth.z - u.depth.y) * (1.0 - u.depth.y / dot(h - u.eye.xyz, u.forward.xyz)), 0.0, 1.0); }
 // A point of the surface as the picture has it, from a ray along rd: coloured by its
-// face, lit from over the eye's shoulder, and at its depth, for what is drawn over the model.
+// face (or, with faces not shown, like every other), lit from over the eye's shoulder,
+// and at its depth, for what is drawn over the model.
 fn surfaced(h: vec3f, normal: vec3f, rd: vec3f, face: i32, feat: i32) -> Seen {
   var seen: Seen;
   seen.depth = deep(h);
   var n = normal;
   let within = dot(n, rd) > 0.0;  // seen from inside the solid
   if (within) { n = -n; }
-  let hue = fract(f32(face) * 0.61803398875);
-  var base = 0.62 + 0.26 * cos(6.2831853 * (hue + vec3f(0.0, 0.33, 0.67)));
-  // a feature and all made inside it: their ids run from chosen.x to chosen.y
-  if ((u.chosen.x > 0 && (feat < u.chosen.x || feat > u.chosen.y)) || (u.chosen.z >= 0 && face != u.chosen.z)) { base = vec3f(0.58); }
+  var base = vec3f(0.7);
+  if (u.chosen.w != 0) {
+    let hue = fract(f32(face) * 0.61803398875);
+    base = 0.62 + 0.26 * cos(6.2831853 * (hue + vec3f(0.0, 0.33, 0.67)));
+    // a feature and all made inside it: their ids run from chosen.x to chosen.y
+    if ((u.chosen.x > 0 && (feat < u.chosen.x || feat > u.chosen.y)) || (u.chosen.z >= 0 && face != u.chosen.z)) { base = vec3f(0.58); }
+  }
   if (within) { base *= 0.72; }
   let light = 0.38 + 0.62 * max(dot(n, normalize(-rd + 0.45 * u.up.xyz - 0.3 * u.right.xyz)), 0.0);
   seen.colour = vec4f(base * light, 1.0);
@@ -244,20 +249,32 @@ const marching = `
   if (!hit) { return seen; }
   return surfaced(h, normalize(n), rd, face, feat);
 }
-// The picture from hits found another way (by the model's regions, below): a pixel's
-// normal and how far along its ray the surface is, or nothing. The model is evaluated
-// once, there, for the face.
-@group(1) @binding(0) var found: texture_2d<f32>;
+// The picture from hits found another way (reached): the model is evaluated once a
+// pixel, at the hit, for the face.
 @fragment fn faced(@builtin(position) at: vec4f) -> Seen {
-  let hit = textureLoad(found, vec2u(at.xy), 0);
-  var seen: Seen; seen.colour = vec4f(u.back.xyz, 1.0); seen.depth = 1.0;
-  if (hit.w == 0.0) { return seen; }
+  let r = reached(at);
+  if (!r.hit) { return Seen(vec4f(u.back.xyz, 1.0), 1.0); }
+  var face = -1; var feat = 0;
+  _ = model(r.at, &face, &feat, table, u.grid.xyz, u.grid.w, u.cells.xyz);
+  return surfaced(r.at, r.normal, r.rd, face, feat);
+}
+`
+
+// What the model's regions found for a pixel (boxed, below), and the picture from that
+// alone, with nothing said of faces: no model is evaluated for it.
+const reaching = `
+@group(1) @binding(0) var found: texture_2d<f32>;  // a pixel: which way the surface faces, and how far along the pixel's ray it is (0: no surface)
+struct Reached { hit: bool, at: vec3f, normal: vec3f, rd: vec3f }
+fn reached(at: vec4f) -> Reached {
+  let f = textureLoad(found, vec2u(at.xy), 0);
   let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
   let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
-  let h = u.eye.xyz + rd * hit.w;
-  var face = -1; var feat = 0;
-  _ = model(h, &face, &feat, table, u.grid.xyz, u.grid.w, u.cells.xyz);
-  return surfaced(h, hit.xyz, rd, face, feat);
+  return Reached(f.w != 0.0, u.eye.xyz + rd * f.w, f.xyz, rd);
+}
+@fragment fn unfaced(@builtin(position) at: vec4f) -> Seen {
+  let r = reached(at);
+  if (!r.hit) { return Seen(vec4f(u.back.xyz, 1.0), 1.0); }
+  return surfaced(r.at, r.normal, r.rd, -1, 0);
 }
 `
 
@@ -270,8 +287,9 @@ const marching = `
 //
 // The regions find where the surface is and which way it faces, not which face it is:
 // choosing a face at every evaluation of a march took most of a picture's time on one
-// model (README). What they find is a picture of numbers, and the model's one compiled
-// shader makes the picture from it (faced).
+// model (README). What they find is a picture of numbers, and the picture is made from
+// it: by the model's one compiled shader, which says the face (faced), or with faces
+// not shown by a shader that needs no model (unfaced).
 const boxing = `
 override share: f32 = 1.0;  // how much of the whole model this region's model() is
 struct Box { @builtin(position) position: vec4f, @location(0) @interpolate(flat) lo: vec3f, @location(1) @interpolate(flat) hi: vec3f }
@@ -362,15 +380,21 @@ fn placed(p: vec3f) -> vec4f { return u.project * vec4f(p + normalize(u.eye.xyz 
 
 let device, context, format, bound, layout, uniforms, coarse, depth, model = null, timer = null
 // how the model is drawn: by one shader compiled for the whole of it, or cut into regions
-// with a shader each (so from the start with ?regions on the page's address, and into at
-// most N of them with ?regions=N). More regions draw faster and take longer to make ready.
+// with a shader each (as it was left, or from the start with ?regions on the page's
+// address, and into at most N of them with ?regions=N). More regions draw faster and take longer to make ready.
 const asked = new URLSearchParams(location.search)
-let regional = asked.has('regions')
+// the switches that are kept from one visit to the next, in the browser's own store for this page
+const kept = (() => { try { return JSON.parse(localStorage.getItem('mk52')) ?? {} } catch { return {} } })()
+const keep = (key, value) => { kept[key] = value; try { localStorage.setItem('mk52', JSON.stringify(kept)) } catch { /* not kept: the switch works all the same */ } }
+let regional = asked.has('regions') || kept.regional === true
+// whether each face has a colour of its own and what is picked out is shown, or the object is drawn alone in one colour
+let faces = kept.faces !== false
 const most = Math.max(1, Math.min(4096, +asked.get('regions') || 512))
-// the regions the model in front is drawn by, once it has them and its compiled shader can give their hits a face
-const cut = () => regional && model?.compiled?.faced ? model.regions ?? null : null
-// what the regions find, a pixel: a picture of numbers, and what the compiled shader reads it through
-let hits, found = null
+// the regions the model in front is drawn by, once it has them and, where faces are shown, its compiled shader can give their hits a face
+const cut = () => regional && (!faces || model?.compiled?.faced) ? model?.regions ?? null : null
+// what the regions find, a pixel: a picture of numbers; what it is read through, alone and beside
+// a model's own gates; and the pipeline that makes the picture of it with faces not shown
+let hits, found = null, relayed, unfaced
 // for a map of the regions' work: what the sums over a pixel's regions are read through,
 // the pipeline that shows them, and the one that marks the pixels whose rays cross the model's box
 let summing, summed, sums = null
@@ -403,6 +427,10 @@ async function graphics() {
     through: device.createRenderPipeline({ layout, vertex: { module: sums, entryPoint: 'whole' }, fragment: { module: sums, entryPoint: 'through', targets: [{ format: 'rgba16float', blend: added }] } }),
   }
   hits = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }] })
+  relayed = device.createPipelineLayout({ bindGroupLayouts: [bound, hits] })
+  const reads = device.createShaderModule({ code: shared + framing + reaching })
+  unfaced = device.createRenderPipeline({ layout: relayed, vertex: { module: reads, entryPoint: 'whole' }, fragment: { module: reads, entryPoint: 'unfaced', targets: [{ format }] },
+                                          depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' } })
   nothing = device.createTexture({ size: [1, 1], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING }).createView()
   const module = device.createShaderModule({ code: shared + tabled + over })
   const blend = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } }
@@ -480,10 +508,10 @@ function boxes(pass, r, pipelines) {
   for (const run of r.runs) { pass.setPipeline(pipelines[run.shader]); pass.draw(36, run.count, 0, run.first) }
 }
 
-// For drawing by regions, the compiled shader made a second time over: to give a face
-// to the hits the regions find.
+// For drawing by regions with faces shown, the compiled shader made a second time over:
+// to give a face to the hits the regions find.
 const facing = m => m.facing ??= device.createRenderPipelineAsync({
-  layout: device.createPipelineLayout({ bindGroupLayouts: [bound, hits] }), vertex: { module: m.compiled.module, entryPoint: 'whole' }, fragment: { module: m.compiled.module, entryPoint: 'faced', targets: [{ format }] },
+  layout: relayed, vertex: { module: m.compiled.module, entryPoint: 'whole' }, fragment: { module: m.compiled.module, entryPoint: 'faced', targets: [{ format }] },
   depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
 }).then(pipeline => { m.compiled.faced = pipeline })
 
@@ -493,7 +521,7 @@ const facing = m => m.facing ??= device.createRenderPipelineAsync({
 async function readied(m) {
   await compiled(m)
   if (!regional) { if (map) await counter(m.compiled); return }
-  Promise.all([regioned(m), facing(m)]).then(async () => {
+  Promise.all([regioned(m), faces && facing(m)]).then(async () => {
     if (map && m.regions) m.regions.weighed ??= await piped(m.regions, 'weighed', [{ format: 'rgba16float', blend: added }])
     if (m == model) { status(); changed() }
   }).catch(e => { if (m == model) { said = e.message; status() } })
@@ -504,7 +532,7 @@ async function readied(m) {
 async function compiled(m) {
   if (m.compiled) return
   const table = await (await fetch('/gates' + about(m.name, '&solo=' + m.alone))).arrayBuffer()
-  const module = device.createShaderModule({ code: shared + tabled + m.source + framing + marching })
+  const module = device.createShaderModule({ code: shared + tabled + m.source + framing + reaching + marching })
   const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
   if (wrong) throw new Error(`The model's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
   const pipeline = await device.createRenderPipelineAsync({
@@ -535,7 +563,7 @@ function uniformed(w, h, back) {
   f.set(p.eye, 0); f.set(p.forward, 4); f.set(p.right, 8); f.set(p.up, 12)
   f.set(scene.lo, 16); f.set(scene.hi, 20); f.set(back, 24); f.set([...grid.lo, grid.cell], 28)
   f.set([w, h, tanHalf, scene.step], 32); f.set([p.diagonal * 2e-4, p.near, p.far], 36)
-  n.set(grid.cells, 40); n.set([feature, last(feature), face], 44)
+  n.set(grid.cells, 40); n.set([feature, last(feature), face, +faces], 44)
   f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, devicePixelRatio, maps.indexOf(map) + 1, cut()?.operations ?? model.compiled?.counted?.total ?? 1], 64)
   return f
 }
@@ -823,7 +851,7 @@ function draw() {
   })
   if (ready) {
     if (r && counting) { pass.setBindGroup(0, sums.shown); pass.setPipeline(summed.shown); pass.draw(3) }
-    else if (r) { pass.setBindGroup(0, given(c, uniforms)); pass.setBindGroup(1, found.read); pass.setPipeline(c.faced); pass.draw(3) }
+    else if (r) { pass.setBindGroup(0, faces ? given(c, uniforms) : plainly(uniforms)); pass.setBindGroup(1, found.read); pass.setPipeline(faces ? c.faced : unfaced); pass.draw(3) }
     else { pass.setBindGroup(0, given(c, uniforms)); pass.setPipeline(counting ? c.counted.heat : c.pipeline); pass.draw(3) }
     pass.setBindGroup(0, plainly(uniforms))
     for (const hidden of [0, 1]) for (const kind of [lines, dots]) if (kind.count) {
@@ -1081,15 +1109,20 @@ for (const what of ['edges', 'sketches', 'frames']) {
 $('extract').onclick = () => current && command('extract', current)
 $('fit').onclick = fit
 $('gated').onclick = () => { gated = !gated; $('gated').setAttribute('aria-pressed', gated); tally = null; status(); changed() }
-$('regional').setAttribute('aria-pressed', regional); $('gated').disabled = regional
-$('regional').onclick = async () => {
-  regional = !regional
-  $('regional').setAttribute('aria-pressed', regional); $('gated').disabled = regional
+// A switch that changes what a model needs made ready: set, kept, and the model in front made ready for it.
+const switched = (id, set) => async () => {
+  const on = set()
+  keep(id, on)
+  $(id).setAttribute('aria-pressed', on); $('gated').disabled = regional
   tally = null; status()
   const m = model
   if (m) try { await readied(m) } catch (e) { said = e.message; status() }
   changed()
 }
+$('regional').setAttribute('aria-pressed', regional); $('gated').disabled = regional
+$('regional').onclick = switched('regional', () => regional = !regional)
+$('faces').setAttribute('aria-pressed', faces)
+$('faces').onclick = switched('faces', () => faces = !faces)
 for (const m of maps) $('map' + m[0].toUpperCase() + m.slice(1)).onclick = () => mapped(m)
 
 // ---- The hand on the picture ----

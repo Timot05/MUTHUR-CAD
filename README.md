@@ -43,7 +43,8 @@ A model is a function that takes `()` and returns a solid: `<project>.<file>.<fu
 - **Over the model:** the outlines of its sketches, the frames its features sit in, and its edges and corners once they are extracted (Find edges, or `mk52 extract`): sharp edges dark, smooth ones grey, corners as dots, flags as red dots, all faint where the model hides them.
 - **The camera:** dragging turns the view about a point, shift-drag or right-drag slides it, the wheel moves the eye towards what is under the pointer. F fits the model; Escape clears what is picked out.
 - **Under the lists:** how large the model is and how long the graphics card took over the last picture, where the browser will say.
-- **Regions** draws the model another way (off unless the page's address ends in `?regions`): cut into some 500 boxes, each drawn by a short shader of its own that holds only what matters inside it; the one compiled shader then gives each pixel its face. It is five times faster on one of the two large models it was tried on and twice as fast on the other, and takes seconds longer to be ready, during which the one compiled shader draws alone. See "Regions, built" below.
+- **Regions** draws the model another way (off until it is switched on, or the page's address ends in `?regions`): cut into some 500 boxes, each drawn by a short shader of its own that holds only what matters inside it; the one compiled shader then gives each pixel its face. It is five times faster on one of the two large models it was tried on and twice as fast on the other, and takes seconds longer to be ready, during which the one compiled shader draws alone. See "Regions, built" below.
+- **Faces** off draws the object alone, in one colour: no face has a colour of its own and nothing picked out is shown. Drawn by regions, a picture then asks nothing of the one compiled shader, which saves about half a millisecond of the synth's 4.5 (3.7 to 4.3 ms against 4.5 to 5.0; 5.4 to 5.8 against 5.9 to 6.5 on the other model). Drawn by the one compiled shader it changes the colours and not the time. Regions and Faces are kept as they were left, in the browser's own store for the page.
 - **Where the work goes:** Gates switches the shader's skipping off, so the time it saves can be read. Cost, Steps and Share draw a map in place of the picture, from a second shader that counts its work (with Regions, from each region's shader, added up over the regions a pixel's ray crosses). Cost is what a pixel's ray ran, in whole evaluations of the model (every operation of the model run once is 1), on a fixed scale of tens, blue under 1 and red over it. It is Steps (how often the ray evaluated the model) times Share (how much of the model an evaluation ran). The picture's totals are under the lists.
 
 It needs a browser with WebGPU: a recent Chrome, Edge or Safari.
@@ -181,7 +182,7 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `cli/scene.ml` | 128 | what the page asks: how a model is drawn, its regions, what a ray hits |
 | `cli/serve.ml` | 209 | the page's server: the folder's files, the command run, the code watched |
 | `cli/mcp.ml` | 145 | tools for an agent: `picture`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
-| `web/view.html` | 1141 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
+| `web/view.html` | 1174 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
 | `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 210 checks (`dune test`, 15 s), and mk49's experiments |
 
 ## Not there
