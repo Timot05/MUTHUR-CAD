@@ -227,3 +227,7 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 - **Frame times are measured on that one model only,** in a test page that drew pictures one straight after another. The page's own figure for a single picture after a pause has read higher (23 ms for the first of those three views); why is not yet known.
 - **A large shader takes a second or more to compile** (1.3 s for that assembly). The page keeps showing the model as it was until the new shader is ready.
 - **Tried in one browser only:** Chromium, on a Mac. Nothing tests the page by itself; it was driven by hand through its lists, the mouse, picking, Find edges and a rebuild on save.
+
+## Licence
+
+MIT: see `LICENSE`.
