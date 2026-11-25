@@ -647,17 +647,19 @@ let brief name =
       String.concat "\n"
         [ Printf.sprintf "%s is the function %s in %s, of the project %s: it builds one solid." name fn path project;
           "";
-          Printf.sprintf "THE CODE: the project is every .ml file under %s/, compiled together. A file is the module of its name, capitalised, to the others (bore.ml is Bore), with no import. A function that takes () and returns a solid can be opened on its own, as this one is; the person sees them listed in the page." project;
+          Printf.sprintf "THE CODE: the project is every .ml file under %s/, compiled together. A file is the module of its name, capitalised, to the others (bore.ml is Bore), with no import. A function that takes () and returns a solid can be opened on its own, as this one is; mk52 models lists them." project;
           "Do not change anything under mk52/ (that is the tool: its kernel is mk52/lib/). If the kernel lacks something you need, say what and stop: that is for the person to decide.";
           "";
           "HOW TO WORK, from this folder. The person has the page open beside their editor: a model that is open is built again, by itself, each time a file is saved, so they see what you do as you do it.";
           Printf.sprintf "  mk52 picture %s  a picture of it, made by the kernel, as a PNG whose path is printed: look at it. Add yaw= pitch= distance= target=x,y,z to look from elsewhere, edges for its edges" name;
           Printf.sprintf "  mk52 section %s z=0  a cut through it where z is 0 (or x=, y=), the parts in colours with a scale: for what is inside it or between its parts. The other two coordinates from:to look closer, as x=10:20; text gives it as letters" name;
+          Printf.sprintf "  mk52 skins %s  after cutting into it: where two of its faces lie on one surface and leave a face of no thickness, which says a cut should start inside what it cuts or end beyond it" name;
           Printf.sprintf "  mk52 clash %s  if it is of several parts: which of them run into each other, touch, or are nearer than gap=0.3, its bought parts too. What is meant to touch is said in the code, as the model is built: Mk52.Clash.allow \"a part\" \"another\"" name;
           Printf.sprintf "  mk52 extract %s  its edges and corners, with every flag: a place where the model may not be what was meant" name;
+          Printf.sprintf "  mk52 mesh %s     its surface as an STL file of even triangles, to print or hand on" name;
           Printf.sprintf "  mk52 outline %s  if it is a flat part, a board: its outline, holes too, as a DXF file of lines, arcs and circles" name;
           Printf.sprintf "  mk52 view %s     opens it in the person's page, in front" name;
-          "What there is to model with, all under mk52/: sketches first (lib/sketch.ml: pulled, turned, or lofted through sections; models/bracket.ml is a worked example), then the primitives (lib/solid.ml), the graph's operations (lib/graph.ml), spline patches (lib/spline.ml) and fitted patches (lib/fit.ml).";
+          "What there is to model with, all under mk52/: sketches first (lib/sketch.ml: pulled, turned, or lofted through sections; models/bracket.ml is a worked example), then the primitives (lib/solid.ml), the graph's operations, features and groups of features (lib/graph.ml), frames to put them in (lib/frame.ml), bought parts shown beside the model (lib/asset.ml), spline patches (lib/spline.ml) and fitted patches (lib/fit.ml).";
           "";
           "Say in a line what you are about to do, and look at a picture after each change; ask only when a choice is the person's to make." ]
 

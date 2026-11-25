@@ -18,7 +18,7 @@
      GET  /asset?id=                 something a model shows from outside, as triangles
      GET  /edges?name=               its edges and corners, or null
      GET  /pick?name=&solo=&ray=     what a ray hits (mk52 pick): ox,oy,oz,dx,dy,dz
-     POST /close /extract ?name=     the command of that name, for the person
+     POST /close?name=               mk52 close, for the person
      POST /state?name=               what the page shows of a model, kept for an agent *)
 open Mk52
 
@@ -164,8 +164,8 @@ let answer port r =
       let ray = String.split_on_char ',' (param "ray") in
       if List.length ray <> 6 || List.exists (fun v -> float_of_string_opt v = None) ray then refuse "400 Bad Request" "ray is ox,oy,oz,dx,dy,dz";
       asked ([ "pick"; name (); view () ] @ ray)
-  | "POST", ("/close" | "/extract") ->
-      let ok, printed, err = run [ String.sub r.path 1 (String.length r.path - 1); name () ] in
+  | "POST", "/close" ->
+      let ok, printed, err = run [ "close"; name () ] in
       (json, Json.to_string (Json.Obj [ ("ok", Json.Bool ok); ("said", Json.Str (if ok then "" else String.trim (printed ^ err))) ]))
   | "POST", "/state" ->
       ignore (try Json.parse r.body with _ -> refuse "400 Bad Request" "not JSON");
