@@ -160,18 +160,54 @@ let forget_gone () =
     (fun d -> List.iter (fun f -> if List.exists (fun project -> String.starts_with ~prefix:project f) gone then Sys.remove (Filename.concat d f)) (files d))
     [ dir; Filename.concat Place.made "state" ]
 
+(* Jobs done each in a process of its own, as many at once as the machine has cores for
+   (Par.cores); each says whether it went well, and so does this: whether all did. What
+   they print comes out as it would. No other core may be at work here when this is
+   called (Par): OCaml does not fork with domains running. *)
+let apart (jobs : (unit -> bool) list) =
+  flush stdout;
+  flush stderr;
+  let ok = ref true and running = ref 0 in
+  let rec reap () =
+    match Unix.wait () with
+    | _, Unix.WEXITED 0 -> decr running
+    | _ -> ok := false; decr running
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> reap ()
+  in
+  List.iter
+    (fun job ->
+      if !running >= Par.cores then reap ();
+      match Unix.fork () with
+      | 0 ->
+          let well = try job () with _ -> false in
+          flush stdout;
+          flush stderr;
+          Unix._exit (if well then 0 else 1)
+      | _ -> incr running)
+    jobs;
+  while !running > 0 do reap () done;
+  !ok
+
 (* A project built again, for the page: its functions listed, and each of its open models
    as its code now makes it. With no project named, every project. What does not build
-   is said, and the rest is still done. *)
+   is said, and the rest is still done.
+
+   By dune a model is its project's program run and what that wrote read, so a project's
+   open models are built side by side, each in a process of its own. The builder is one
+   process that builds one model after another. *)
 let refresh projects =
   forget_gone ();
   let open_ = Place.opened () and failed = ref false in
-  let attempt what f = try f () with Failure why -> failed := true; Printf.printf "%s\n" (if String.starts_with ~prefix:what why then why else what ^ ": " ^ why) in
+  let said what why = Printf.printf "%s\n%!" (if String.starts_with ~prefix:what why then why else what ^ ": " ^ why) in
   List.iter
     (fun project ->
-      attempt project (fun () ->
-          ignore (Project.functions project);
-          List.iter (fun name -> if String.starts_with ~prefix:(project ^ ".") name then attempt name (fun () -> hand (Project.model name))) open_))
+      match Project.functions project with
+      | exception Failure why -> failed := true; said project why
+      | _ ->
+          let build name () = try hand (Project.model name); true with Failure why -> said name why; false in
+          let jobs = List.filter_map (fun name -> if String.starts_with ~prefix:(project ^ ".") name then Some (build name) else None) open_ in
+          let well = match Lazy.force Project.way with Dune -> apart jobs | Carried -> List.fold_left (fun all job -> job () && all) true jobs in
+          if not well then failed := true)
     (if projects = [] then Project.projects () else projects);
   if !failed then exit 1
 

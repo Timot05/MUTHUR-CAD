@@ -218,7 +218,7 @@ const show = { edges: true, sketches: true, frames: true, assets: true }
 let said = '', building = false, asking = 0, took = null
 // what was last seen of the folder: the model in front as the command wrote it, and the
 // note of which model to bring to the front
-let written = null, fronted = null, taking = 0
+let written = null, fronted = null, taking = 0, coming = null  // coming: the model being made ready to take the place of the one drawn
 const fitted = new Set()
 
 // ---- The camera ----
@@ -564,14 +564,14 @@ let device, context, format, bound, layout, uniforms, depth, model = null, timer
 // ready soonest, and then cut into regions with a short shader each (lib/region.ml),
 // which draw a large model several times faster. More regions draw faster and take
 // longer to make ready.
-const most = 512
+const most = 512, few = 32
 // the switches that are kept from one visit to the next, in the browser's own store for this page
 const kept = (() => { try { return JSON.parse(localStorage.getItem('mk52')) ?? {} } catch { return {} } })()
 const keep = (key, value) => { kept[key] = value; try { localStorage.setItem('mk52', JSON.stringify(kept)) } catch { /* not kept: the switch works all the same */ } }
 // whether each face has a colour of its own and what is picked out is shown, or the object is drawn alone in one colour
 let faces = kept.faces !== false
 // the regions the model in front is drawn by, once it has them and, where faces are shown, its compiled shader can give their hits a face
-const cut = () => model && (!told(model) || model.compiled?.faced) ? model.regions ?? null : null
+const cut = () => model && (!told(model) || model.compiled?.faced || model.large) ? model.regions ?? null : null  // none after the card was lost (readied)
 // what the regions find, a pixel: a picture of numbers; what it is read through, alone and beside
 // a model's own gates; and the pipeline that makes the picture of it with faces not shown
 let hits, found = null, relayed, unfaced
@@ -593,7 +593,7 @@ async function graphics() {
   if (!adapter) throw new Error('This browser does not offer WebGPU, which the picture is drawn with. A recent Chrome, Edge or Safari has it.')
   const timed = adapter.features.has('timestamp-query')
   device = await adapter.requestDevice({ requiredFeatures: timed ? ['timestamp-query'] : [] })
-  device.lost.then(() => { said = 'The graphics card was lost to the page. Load the page again.'; model = null; panel() })
+  device.lost.then(regained)
   context = canvas.getContext('webgpu')
   format = navigator.gpu.getPreferredCanvasFormat()
   context.configure({ device, format, alphaMode: 'opaque' })
@@ -633,8 +633,26 @@ async function graphics() {
   // how long the graphics card takes over a picture, where it will say
   if (timed) timer = { queries: device.createQuerySet({ type: 'timestamp', count: 2 }), resolved: device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }),
                        read: device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), reading: false }
-  new ResizeObserver(sized).observe(canvas)
+  watched ??= new ResizeObserver(sized).observe(canvas) ?? true
   sized()
+}
+
+// The graphics card can be lost to the page: the browser's own process for it stopped,
+// or ran out of room. The first time, the page takes a new one and goes on without the
+// regions, the heaviest thing it asks of the card. A second time it says so and stops.
+let watched, losses = 0, lostTo = ''
+async function regained(lost) {
+  losses++
+  lostTo = lost.message ? ` (${lost.message})` : ''
+  dropped(model); model = null
+  if (losses > 1) { said = `The graphics card was lost to the page again${lostTo}. Load the page again.`; panel(); return }
+  try {
+    // nothing made with the card that was lost is of use to the new one
+    plainly.made = null; meshes.clear(); pipes.clear(); found = null; depth = null
+    for (const kind of [lines, dots]) { kind.buffer = null; kind.count = 0 }
+    await graphics()
+    written = null; follow(); lay()
+  } catch (e) { said = e.message; panel() }
 }
 
 // While the view is being moved the picture is drawn with fewer pixels, so that it keeps
@@ -670,7 +688,11 @@ function sized() {
 
 // A model as the page holds it: what each way of drawing needs of it, made when that
 // way is first asked for.
-const held = (s, name, view) => ({ name, view, source: s.shader, gates: s.gates, colours: s.features.filter(f => f.colour), compiled: null, regions: null, assets: [] })
+const held = (s, name, view) => ({ name, view, source: s.shader, large: s.shader.length > heavy, gates: s.gates, colours: s.features.filter(f => f.colour), compiled: null, regions: null, assets: [] })
+// A model's one shader is long to compile where it is long: a second or two for each
+// million characters, on one core. One longer than this is not compiled for marching
+// at all, while the model has regions: its first picture is by them (readied).
+const heavy = 1.5e6
 
 // The colours of some features as a row for the shader: at each one's number its colour,
 // and nothing (no colour: grey) at the numbers between.
@@ -725,13 +747,19 @@ const regioned = m => m.cutting ??= (async () => {
     if (runs[runs.length - 1]?.shader == shader(r)) runs[runs.length - 1].count++
     else runs.push({ shader: shader(r), first: i, count: 1 })
   })
-  const modules = made.shaders.map(s => device.createShaderModule({ code: shared + s.text + framing + boxing }))
-  // they are all written the same way: what is wrong with one is wrong with the first
-  const wrong = modules.length && (await modules[0].getCompilationInfo()).messages.find(m => m.type == 'error')
-  if (wrong) throw new Error(`A region's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
-  const r = { count, runs }
-  r.drawn = await Promise.all(modules.map(module => device.createRenderPipelineAsync(boxed(module))))
-  if (m.gone) return
+  // The shaders are compiled a few at a time. A large assembly's are a hundred megabytes
+  // of text, and all at once that is more than the browser's side of the graphics card
+  // may take; and a model let go of meanwhile is not compiled to the end for nothing.
+  const r = { count, runs, drawn: [] }
+  m.ahead = { done: 0, of: made.shaders.length }
+  for (let i = 0; i < made.shaders.length; i += few) {
+    r.drawn.push(...await Promise.all(made.shaders.slice(i, i + few).map(s => piped(s.text))))
+    if (m.gone) return
+    m.ahead.done = r.drawn.length
+    if (m == model || m == coming) status()
+  }
+  // of the pipelines kept, the longest unused go
+  while (pipes.size > spare) pipes.delete(pipes.keys().next().value)
   // the regions' boxes, and after them the cells that are solid all through
   const cells = new Float32Array(made.solid ?? [])
   r.solid = cells.length / 6
@@ -740,6 +768,26 @@ const regioned = m => m.cutting ??= (async () => {
   device.queue.writeBuffer(r.buffer, boxes.byteLength, cells)
   m.regions = r
 })()
+
+// A region's shader compiled into its pipeline, kept by its text. A model built again
+// mostly asks for the same ones: the kernel numbers a program's registers within it, so
+// a cell that needs what it needed before has the same text, and is not compiled twice.
+// The latest used are last, and some three assemblies' worth are kept.
+const pipes = new Map(), spare = 1600
+function piped(text) {
+  let made = pipes.get(text)
+  if (made) pipes.delete(text)
+  else {
+    const module = device.createShaderModule({ code: shared + text + framing + boxing })
+    made = device.createRenderPipelineAsync(boxed(module)).catch(async e => {
+      pipes.delete(text)
+      const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
+      throw new Error(wrong ? `A region's shader does not compile: ${wrong.message} (line ${wrong.lineNum})` : e.message)
+    })
+  }
+  pipes.set(text, made)
+  return made
+}
 
 // A pipeline for a shader of boxes: where the surface is, for a pixel of one of its boxes.
 const boxed = module => ({
@@ -758,37 +806,60 @@ function boxes(pass, r) {
 
 // Where faces are shown, the compiled shader made a second time over:
 // to give a face to the hits the regions find.
-const facing = m => m.facing ??= device.createRenderPipelineAsync({
-  layout: relayed, vertex: { module: m.compiled.module, entryPoint: 'whole' }, fragment: { module: m.compiled.module, entryPoint: 'faced', targets: [{ format }] },
+const faceable = module => device.createRenderPipelineAsync({
+  layout: relayed, vertex: { module, entryPoint: 'whole' }, fragment: { module, entryPoint: 'faced', targets: [{ format }] },
   depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
-}).then(pipeline => { m.compiled.faced = pipeline })
+})
+const facing = m => m.facing ??= (m.early ?? faceable(m.compiled.module)).then(pipeline => { m.compiled.faced = pipeline })
 
 // A model made ready to draw. The one compiled shader comes first: it is ready sooner.
 // The regions follow, and take over the drawing when they are there.
 async function readied(m) {
-  await compiled(m)
-  Promise.all([regioned(m), told(m) && facing(m)])
-    .then(() => { if (m == model) { status(); changed() } })
-    .catch(e => { if (m == model) { said = e.message; status() } })
+  const after = made => made.then(() => { if (m == model) { status(); changed() } }).catch(e => { if (m == model) { said = e.message; status() } })
+  // the regions are asked of the kernel at once, while the one shader is compiled
+  const regions = losses ? null : regioned(m)
+  // A large model that comes in place of one on the screen is ready when its regions
+  // are: they draw it. Its one shader is compiled beside them, and only for what gives
+  // their hits a face, not for marching: that is one long compiling the less, and the
+  // picture that is there stays meanwhile. Until the faces are there the new one is
+  // without them, and without colours. With nothing on the screen yet, or if the regions
+  // cannot be made, the model is made ready as a small one is: marched first.
+  if (m.large && regions && model) {
+    const faces = compiled(m).then(() => told(m) && facing(m))
+    faces.catch(() => {})  // said by [after], if the regions are made
+    if (await regions.then(() => true, () => false)) { if (!m.gone) after(faces); return }
+  }
+  regions?.catch(() => {})  // what goes wrong with them is said below
+  await marched(m)
+  if (regions) after(Promise.all([regions, told(m) && facing(m)]))
 }
 
-// For the compiled shader: the kernel's own text for the model compiled (a large one
-// takes a second or more), and its gates' table a texture.
-async function compiled(m) {
-  if (m.compiled) return
+// For the compiled shader: the kernel's own text for the model compiled, and its gates'
+// table a texture. Asked for once a model.
+const compiled = m => m.compiling ??= (async () => {
   const table = await (await fetch('/gates' + about(m.name, m.view))).arrayBuffer()
   const module = device.createShaderModule({ code: shared + tabled + m.source + framing + reaching + marching })
   const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
   if (wrong) throw new Error(`The model's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
-  const pipeline = await device.createRenderPipelineAsync({
-    layout, vertex: { module, entryPoint: 'whole' }, fragment: { module, entryPoint: 'marched', targets: [{ format }] },
-    depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
-  })
+  // A large model's shader takes long to compile, and each of its two pipelines compiles
+  // it again. Where the one that gives the regions' hits a face will be wanted (facing),
+  // it is asked for now, not when the other is done.
+  m.early = told(m) && !losses ? faceable(module) : null
+  m.early?.catch(() => {})  // said where it is waited for
   const across = m.gates.width, rows = Math.max(1, Math.floor(table.byteLength / (16 * across)))
   const texture = device.createTexture({ size: [across, rows], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
   device.queue.writeTexture({ texture }, table, { bytesPerRow: 16 * across }, [across, rows])
-  m.compiled = { module, pipeline, texture, paint: painted(m.colours) }
-}
+  m.compiled = { module, pipeline: null, texture, paint: painted(m.colours) }
+})()
+
+// The pipeline that marches a picture through the compiled shader: what draws a model
+// that has no regions, or not yet. Asked for once a model.
+const marched = m => m.marching ??= compiled(m).then(async () => {
+  m.compiled.pipeline = await device.createRenderPipelineAsync({
+    layout, vertex: { module: m.compiled.module, entryPoint: 'whole' }, fragment: { module: m.compiled.module, entryPoint: 'marched', targets: [{ format }] },
+    depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
+  })
+})
 
 // What a compiled shader is given: the uniforms, the table of its gates, its colours.
 const given = c => c.given ??= device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer: uniforms } }, { binding: 1, resource: c.texture.createView() }, { binding: 2, resource: c.paint.createView() }] })
@@ -836,7 +907,7 @@ function draw() {
   if (!device || !depth) return
   const w = canvas.width, h = canvas.height
   const back = getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g).slice(0, 3).map(v => v / 255)
-  const c = model?.compiled, r = cut(), ready = scene && c
+  const c = model?.compiled, r = cut(), ready = scene && (r || c?.pipeline)
   const timing = timer && !timer.reading && ready
   const whole = sharp == 1
   const encoder = device.createCommandEncoder()
@@ -862,7 +933,7 @@ function draw() {
     ...(timing ? { timestampWrites: { querySet: timer.queries, ...(finding ? {} : { beginningOfPassWriteIndex: 0 }), endOfPassWriteIndex: 1 } } : {}),
   })
   if (ready) {
-    if (r) { const asks = told(model); pass.setBindGroup(0, asks ? given(c) : plainly()); pass.setBindGroup(1, found.read); pass.setPipeline(asks ? c.faced : unfaced); pass.draw(3) }
+    if (r) { const asks = told(model) && c?.faced; pass.setBindGroup(0, asks ? given(c) : plainly()); pass.setBindGroup(1, found.read); pass.setPipeline(asks ? c.faced : unfaced); pass.draw(3) }
     else { pass.setBindGroup(0, given(c)); pass.setPipeline(c.pipeline); pass.draw(3) }
     pass.setBindGroup(0, plainly())
     if (show.assets) for (const a of model.assets) {
@@ -1044,6 +1115,7 @@ async function take(name, view, basis = scene?.name == name ? scene.features : n
     const found = await (await fetch('/edges' + about(name))).json()
     if (stale()) return
     const ready = held(s, name, view)
+    coming = ready
     await Promise.all([readied(ready), assembled(ready, s.assets.filter(a => !outOf(s, a.feature)))])
     // a later one was asked for meanwhile, or the person moved on
     if (stale()) { dropped(ready); return }
@@ -1056,7 +1128,7 @@ async function take(name, view, basis = scene?.name == name ? scene.features : n
     if (!fitted.has(name)) { fitted.add(name); fit() }
     lay(); panel(); changed()
   } catch (e) { if (mine == taking && current == name) { said = e.message; status() } }
-  finally { viewing--; status() }
+  finally { if (mine == taking) coming = null; viewing--; status() }
 }
 
 // What is shown changed by the person: asked for a moment later, so that quick clicks on
@@ -1269,8 +1341,11 @@ const ms = t => `${t < 10 ? t.toFixed(1) : Math.round(t)} ms`
 function status() {
   $('status').replaceChildren(...[
     (building || asking > 0) && el('div', {}, 'Building…'),
-    !building && !asking && viewing > 0 && el('div', {}, 'Making what is shown…'),
+    !building && !asking && viewing > 0 && el('div', {}, 'Making what is shown…' + (coming?.ahead ? ` Its regions: ${coming.ahead.done} of ${coming.ahead.of}.` : '')),
     said && el('pre', { id: 'said' }, said),
+    !said && scene && cut() && told(model) && !model.compiled?.faced && el('div', {}, 'Drawn without faces or colours until its one shader is compiled.'),
+    !said && scene && model?.ahead && !cut() && el('div', {}, `Drawn by one shader while its regions, which draw faster, are made ready: ${model.ahead.done} of ${model.ahead.of}.`),
+    !said && losses > 0 && el('div', {}, `The graphics card was lost to the page once${lostTo}. Models are drawn the slower way since, by one shader. Loading the page again tries the faster way again.`),
     !said && scene && el('div', {}, `${scene.nodes} nodes, ${scene.selects} selects` + (took == null ? '' : ` · ${ms(took)} a picture`)),
     // an asset whose file could not be read
     ...(said || !scene ? [] : scene.assets.filter(a => a.said).map(a => el('pre', { className: 'bad' }, a.said))),
