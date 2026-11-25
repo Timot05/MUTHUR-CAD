@@ -63,16 +63,22 @@
    _mk52/open/. An agent works in the person's editor, and does not go through the page
    to see: a picture is made here, by the kernel.
 
-   The tool is where its script is (MK52_HOME). A design folder is a dune project with a
-   link, mk52, to the tool: through it the design's code is compiled against the tool's
-   kernel, as it is now. *)
+   The tool is where its script is (MK52_HOME). With its source, a design folder is a
+   dune project with a link, mk52, to the tool: through it the design's code is compiled
+   against the tool's kernel, as it is now. A released tool has no source to link to and
+   compiles nothing: its builder reads a project's code itself (cli/project.ml), and a
+   design folder is one with the file mk52.design in it. *)
 open Mk52
 
 let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | clash <model> [other model] [gap=0.3] | section <model> x=|y=|z=<number> [the others from:to] [paint] [text] [width=] [columns=] [out=] | new <project> <file> | brief <model> | mcp | install"
 let home = Place.home ()
+let command = Place.command ()
 
-(* The design folder: here or above, the folder with a dune-project and the link to the tool. *)
-let rec design dir = if Sys.file_exists (Filename.concat dir "dune-project") && Place.is_dir (Filename.concat dir "mk52") then Some dir else let up = Filename.dirname dir in if up = dir then None else design up
+(* The design folder: here or above, the folder with a dune-project and the link to the
+   tool, or the one marked as a design folder by a tool that has no source. *)
+let rec design dir =
+  if (Sys.file_exists (Filename.concat dir "dune-project") && Place.is_dir (Filename.concat dir "mk52")) || Sys.file_exists (Filename.concat dir Place.marker) then Some dir
+  else let up = Filename.dirname dir in if up = dir then None else design up
 let () = match design (Sys.getcwd ()) with Some d -> Sys.chdir d | None -> ()
 
 (* ---- The page ---- *)
@@ -82,6 +88,18 @@ let running () =
   match List.map int_of_string_opt (String.split_on_char ' ' (String.trim (In_channel.with_open_bin Place.server In_channel.input_all))) with
   | [ Some pid; Some port ] -> ( try Unix.kill pid 0; Some (pid, port) with Unix.Unix_error _ -> None)
   | _ | (exception Sys_error _) -> None
+
+(* The server told to stop, and waited for: one that has not gone in two seconds is
+   ended, and what it wrote down of itself taken away. *)
+let stop pid =
+  let there () = try Unix.kill pid 0; true with Unix.Unix_error _ -> false in
+  (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
+  let rec wait tries = if there () && tries > 0 then (Unix.sleepf 0.1; wait (tries - 1)) in
+  wait 20;
+  if there () then begin
+    (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+    try Sys.remove Place.server with Sys_error _ -> ()
+  end
 
 (* The server started here if it is not running, on its own: it outlives this command.
    What it says goes to _mk52/server.log. Its port, once it has one. *)
@@ -194,7 +212,7 @@ let () =
     | [ "status" ] ->
         print_endline (match running () with None -> "The page is not served here: mk52 open starts it." | Some (_, port) -> Printf.sprintf "The page is served here: http://localhost:%d/" port);
         (match Place.opened () with [] -> print_endline "  nothing is open" | names -> List.iter (Printf.printf "  %s\n") names)
-    | [ "stop" ] -> ( match running () with None -> print_endline "The page is not served here." | Some (pid, _) -> Unix.kill pid Sys.sigterm; print_endline "The page's server is stopped.")
+    | [ "stop" ] -> ( match running () with None -> print_endline "The page is not served here." | Some (pid, _) -> stop pid; print_endline "The page's server is stopped.")
     | "extract" :: name :: cells ->
         let depth = match cells with [] | [ "64" ] | [ "6" ] -> 6 | [ "32" ] | [ "5" ] -> 5 | [ "128" ] | [ "7" ] -> 7 | _ -> failwith "cells across: 32, 64 or 128" in
         let m = Project.model name in
@@ -262,19 +280,22 @@ let () =
         Printf.printf "%s made: its graph is a block to start from. See it with: mk52 view %s.%s\n" path project file
     | [ "brief"; name ] -> print_endline (Project.brief name)
     | [ "init" ] ->
-        (* a dune project of its own, the link through which it reaches the tool's kernel, and the tools for an agent *)
+        (* with the tool's source, a dune project of its own; without, the mark that this
+           is a design folder. Either way the link to the tool, through which the design's
+           code is compiled against the kernel, or the kernel's code is only read; and the
+           tools for an agent *)
         let here = Sys.getcwd () in
         let write path text = if Sys.file_exists path then Printf.printf "%s is there already: left as it is\n" path else (Out_channel.with_open_bin path (fun oc -> output_string oc text); Printf.printf "%s made\n" path) in
-        write "dune-project" "(lang dune 3.0)\n";
+        if Place.sourced () then write "dune-project" "(lang dune 3.0)\n" else write Place.marker "A design folder of mk52: each folder here with .ml files in it is a project.\n";
         if Sys.file_exists "mk52" then print_endline "mk52 is there already: left as it is" else (Unix.symlink (if Filename.dirname home = Filename.dirname here then Filename.concat ".." (Filename.basename home) else home) "mk52"; print_endline "mk52 made: a link to the tool");
         write ".gitignore" "_mk52/\n_build/\n";
-        write ".mcp.json" (Printf.sprintf "{\n  \"mcpServers\": {\n    \"mk52\": {\n      \"command\": %s,\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n" (Json.quote (Filename.concat home "mk52")));
+        write ".mcp.json" (Printf.sprintf "{\n  \"mcpServers\": {\n    \"mk52\": {\n      \"command\": %s,\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n" (Json.quote command));
         print_endline "This is a design folder now. mk52 new <project> <file> makes a project and its first file, and mk52 open opens the page."
     | [ "install" ] ->
         let bin = Filename.concat (Sys.getenv "HOME") ".local/bin" in
         if not (Project.is_dir bin) then failwith (bin ^ " is not there: make it and put it on your PATH, then try again");
         let shim = Filename.concat bin "mk52" in
-        Out_channel.with_open_bin shim (fun oc -> Printf.fprintf oc "#!/bin/sh\n# mk52, the tool at %s\nexec %s \"$@\"\n" home (Filename.quote (Filename.concat home "mk52")));
+        Out_channel.with_open_bin shim (fun oc -> Printf.fprintf oc "#!/bin/sh\n# mk52, the tool at %s\nexec %s \"$@\"\n" home (Filename.quote command));
         Unix.chmod shim 0o755;
         Printf.printf "%s made: mk52 now runs the tool at %s\n" shim home
     | [ "mcp" ] -> Mcp.run ()

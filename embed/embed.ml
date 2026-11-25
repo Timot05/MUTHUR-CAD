@@ -16,7 +16,8 @@
    with -I.
 
    embed -I dir ... project            the project's functions
-   embed -I dir ... project function   that function built, written to standard output *)
+   embed -I dir ... project function   that function built, written to standard output
+   embed -I dir ... project -serve     the project loaded once and kept: see [serve] *)
 
 let fail fmt = Printf.ksprintf (fun s -> prerr_endline s; exit 2) fmt
 
@@ -116,16 +117,55 @@ let entries paths =
       List.filter_map (fun v -> if run ~ppf:quiet (Printf.sprintf "let (_ : unit -> Mk52.Graph.t) = %s.%s" m v) then Some (file path ^ "." ^ v, m ^ "." ^ v) else None) values)
     paths
 
+(* A function called, and what it built written to a file. *)
+let build value out =
+  run (Printf.sprintf "let mk52_built_ : Mk52.Graph.t = %s ()" value)
+  &&
+  let graph : Mk52.Graph.t = Obj.obj (Toploop.getvalue "mk52_built_") in
+  Out_channel.with_open_bin out (fun oc -> Marshal.to_channel oc (Mk52.Emit.built graph) []);
+  true
+
+(* The project kept loaded, for whoever asks one thing after another on standard input:
+     list                    its functions, a line each, then a line with a dot
+     build <function> <file> that function built into the file: first a line "child"
+                             with the process that builds it, then "ok" or "failed"
+   Loading is the slow part, and is done once. Each build is done in a copy of this
+   process, so one build leaves nothing behind for the next, and one that goes on too
+   long can be stopped by stopping its process. What goes wrong is said on standard
+   error. *)
+let serve entries =
+  let say line = print_string (line ^ "\n"); flush stdout in
+  say "ready";
+  try
+    while true do
+      match String.split_on_char ' ' (input_line stdin) with
+      | [ "list" ] -> List.iter (fun (name, _) -> say name) entries; say "."
+      | "build" :: name :: out when out <> [] -> (
+          match List.assoc_opt name entries with
+          | None -> prerr_endline ("there is no function " ^ name ^ " that builds a solid on its own"); say "failed"
+          | Some value -> (
+              Format.pp_print_flush Format.err_formatter ();
+              flush stderr;
+              match Unix.fork () with
+              | 0 ->
+                  let ok = try build value (String.concat " " out) with e -> prerr_endline (Printexc.to_string e); false in
+                  Format.pp_print_flush Format.err_formatter ();
+                  flush stderr;
+                  Unix._exit (if ok then 0 else 2)
+              | pid ->
+                  say (Printf.sprintf "child %d" pid);
+                  say (match Unix.waitpid [] pid with _, Unix.WEXITED 0 -> "ok" | _ -> "failed")))
+      | _ -> say "failed"
+    done
+  with End_of_file -> ()
+
 let () =
   let rec split dirs rest = function "-I" :: d :: more -> split (d :: dirs) rest more | a :: more -> split dirs (a :: rest) more | [] -> (List.rev dirs, List.rev rest) in
   match split [] [] (List.tl (Array.to_list Sys.argv)) with
   | dirs, [ project ] -> List.iter (fun (name, _) -> print_endline name) (entries (load dirs project))
+  | dirs, [ project; "-serve" ] -> serve (entries (load dirs project))
   | dirs, [ project; wanted ] -> (
       match List.assoc_opt wanted (entries (load dirs project)) with
       | None -> fail "%s has no function %s that builds a solid on its own" project wanted
-      | Some value ->
-          if not (run (Printf.sprintf "let mk52_built_ : Mk52.Graph.t = %s ()" value)) then exit 2;
-          let graph : Mk52.Graph.t = Obj.obj (Toploop.getvalue "mk52_built_") in
-          set_binary_mode_out stdout true;
-          Marshal.to_channel stdout (Mk52.Emit.built graph) [])
-  | _ -> fail "embed -I dir ... project [function]"
+      | Some value -> if not (build value "/dev/stdout") then exit 2)
+  | _ -> fail "embed -I dir ... project [function | -serve]"

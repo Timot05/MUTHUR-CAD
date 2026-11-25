@@ -1,10 +1,11 @@
 #!/bin/sh
 # The mk52 command (cli/main.ml), from any design folder: the tool is built first if its
 # sources have changed, then run where it was called. If another build holds the tool's
-# build folder, what is already built is run.
+# build folder, what is already built is run: dune says so as "locked the build
+# directory" up to 3.20 or so, and after as "Build requests require a watch-mode server".
 home=$(cd "$(dirname "$0")" && pwd -P) || exit 2
-out=$(cd "$home" && dune build cli/main.exe tools/entries.exe 2>&1) || case "$out" in
-  *"locked the build directory"*) ;;
+out=$(cd "$home" && dune build cli/main.exe tools/entries.exe embed/embed.bc.exe 2>&1) || case "$out" in
+  *"locked the build directory"* | *"require a watch-mode server"*) ;;
   *) printf '%s\n' "$out" >&2; exit 2 ;;
 esac
 MK52_HOME="$home" exec "$home/_build/default/cli/main.exe" "$@"

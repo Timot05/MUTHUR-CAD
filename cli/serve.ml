@@ -22,7 +22,7 @@
      POST /state?name=               what the page shows of a model, kept for an agent *)
 open Mk52
 
-let tool = Filename.concat (Place.home ()) "mk52"
+let tool = Place.command ()
 let read path = In_channel.with_open_bin path In_channel.input_all
 
 (* The command run here: whether it succeeded, what it printed, what it said went wrong. *)
@@ -212,8 +212,10 @@ let main () =
   let sock, port = listen () in
   ignore (Place.folder Place.made);
   Out_channel.with_open_bin Place.server (fun oc -> Printf.fprintf oc "%d %d\n" (Unix.getpid ()) port);
-  at_exit (fun () -> try Sys.remove Place.server with Sys_error _ -> ());
-  Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> exit 0));
+  (* told to stop, it goes at once, without the leave-taking of exit: that flushes every
+     open channel, and one to a page that went away in the middle of an answer can be
+     left locked for good, which kept a stopped server from ever going *)
+  Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> (try Sys.remove Place.server with Sys_error _ -> ()); Unix._exit 0));
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   ignore (Thread.create watch ());
   while true do

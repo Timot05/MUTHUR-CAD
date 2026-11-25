@@ -410,6 +410,45 @@ let clashes () =
   is "a shown part's point inside a solid" (Clash.against (ball 0.) [ [| 5.; 0.; 0. |]; [| 1.5; 0.; 0. |]; [| 0.; 3.; 0. |] ]) (function Some (c, at) -> Float.abs (c +. 0.5) < 1e-6 && at.(0) = 1.5 | None -> false);
   is "a shown part's points all away from a solid" (Clash.against (ball 0.) [ [| 5.; 0.; 0. |]; [| 0.; 3.; 0. |] ]) (fun r -> r = None)
 
+(* The builder that carries the compiler (embed/embed.ml): of a project of two files, one
+   referring to the other, it lists the functions that build a solid on their own and
+   no others, and builds one into the solid its code says; kept running, it builds one
+   after another and says which it has not; and a file that does not compile stops it,
+   with the place said. *)
+let builder () =
+  let embed = "../embed/embed.bc.exe" and kernel = "../lib/.mk52.objs/byte" in
+  let dir = Filename.temp_file "mk52" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o755;
+  let project = Filename.concat dir "lamp" in
+  Sys.mkdir project 0o755;
+  let write name text = Out_channel.with_open_bin (Filename.concat project name) (fun oc -> output_string oc text) in
+  write "size.ml" "let radius = 2.\nlet double x = 2. *. x\n";
+  write "base.ml" "open Mk52\n\nlet graph () = Graph.feature __POS__ \"ball\" (fun () -> Solid.sphere \"ball\" (0., 0., 0.) Size.radius)\nlet scaled k () = Solid.sphere \"ball\" (0., 0., 0.) k\nlet not_a_solid () = 3\n";
+  let run ?(input = "") args =
+    let out = Filename.temp_file "mk52" ".out" and err = Filename.temp_file "mk52" ".err" and inp = Filename.temp_file "mk52" ".in" in
+    Out_channel.with_open_bin inp (fun oc -> output_string oc input);
+    let code = Sys.command (Printf.sprintf "%s -I %s %s < %s > %s 2> %s" embed kernel (String.concat " " (List.map Filename.quote args)) inp out err) in
+    let read p = let s = In_channel.with_open_bin p In_channel.input_all in Sys.remove p; s in
+    Sys.remove inp;
+    (code, read out, read err)
+  in
+  let code, listed, err = run [ project ] in
+  check "builder: a project's functions that build a solid, and no others" (code = 0 && listed = "base.graph\n") (Printf.sprintf "%d %S %S" code listed err);
+  let code, built, err = run [ project; "base.graph" ] in
+  let value (built : Emit.built) x = let p = Prog.compile built.graph in Prog.value p (Prog.ctx p) (Prog.whole p) x in
+  check "builder: one of them built is the solid its code says"
+    (code = 0 && (match (Marshal.from_string built 0 : Emit.built) with b -> Float.abs (value b [| 5.; 0.; 0. |] -. 3.) < 1e-9 && List.map (fun (f : Graph.feature) -> f.fname) b.features = [ "ball" ] | exception _ -> false))
+    (Printf.sprintf "%d, %d bytes, %S" code (String.length built) err);
+  let file = Filename.concat dir "built" in
+  let code, said, _ = run ~input:(Printf.sprintf "list\nbuild base.graph %s\nbuild base.nothing %s\n" file file) [ project; "-serve" ] in
+  let lines = List.filter (fun l -> not (String.starts_with ~prefix:"child " l)) (String.split_on_char '\n' (String.trim said)) in
+  check "builder: kept running, it lists, builds one, and says it has not the other" (code = 0 && lines = [ "ready"; "base.graph"; "."; "ok"; "failed" ] && Sys.file_exists file) (String.concat " | " lines);
+  write "wrong.ml" "let wrong () = Mk52.Solid.sphere \"ball\" (0., 0., 0.) \"two\"\n";
+  let code, _, err = run [ project ] in
+  let has part = let n = String.length part in let rec at i = i + n <= String.length err && (String.sub err i n = part || at (i + 1)) in at 0 in
+  check "builder: a file that does not compile is said, with the place" (code <> 0 && has "wrong.ml\", line 1" && has "string") err
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -426,4 +465,5 @@ let () =
   outlines ();
   cuts ();
   clashes ();
+  builder ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

@@ -37,6 +37,25 @@ Edit `lamp/base.ml` in your editor; every time a file is saved the project is bu
 
 A model is a function that takes `()` and returns a solid: `<project>.<file>.<function>`, or `<project>.<file>` for a file's `graph` or its only function. A model is looked at in the box of its own surface, which the octree finds; it must lie within 10 m of the origin.
 
+## Two ways to build a design
+
+A design's code is OCaml. The command turns it into models in one of two ways, and says nothing different either way.
+
+- **By dune.** The project is compiled once into a program of its own. This needs OCaml and dune installed, and the tool's source (a design folder reaches it through its link `mk52`). It is what an editor's OCaml support reads, and it is what is used wherever it can be.
+- **By the builder.** `embed/embed.ml` carries the OCaml compiler. It reads a project's files, checks and loads them, and builds a function by name; the command keeps it running with the project loaded and starts it again when a file has changed. This needs nothing installed. A model takes a little longer to build (the code runs as bytecode), and nothing is compiled ahead.
+
+`MK52_BUILDER=dune` or `MK52_BUILDER=carried` says which; unsaid, it is dune where dune can do it, and the builder otherwise. Both build the same solids: the same faces and features, and fields that agree to rounding.
+
+## A release
+
+```sh
+tools/release.sh              # _release/mk52-<system>-<machine>/
+```
+
+makes a folder that is the whole tool: `bin/mk52`, `bin/mk52-build` (the builder), `interfaces/` (the kernel's and the standard library's compiled interfaces, which the builder checks a design's code against), `web/view.html`, and the kernel's code to read. Put its `bin/` on the path, and `mk52 init` in an empty folder makes a design folder there: marked by the file `mk52.design`, with a link `mk52` to the tool, and every folder with `.ml` files in it a project. No OCaml is needed where it is used.
+
+On macOS the builder's one outside library (zstd, which OCaml's bytecode runtime is linked to) is carried in `bin/` beside it. The script has only been run on macOS.
+
 ## The page
 
 - **The picture** is a ray a pixel, marched through a shader the kernel writes for the model in WGSL (`lib/shader.ml`). Each face has its own colour.
@@ -194,9 +213,10 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `cli/scene.ml` | 128 | what the page asks: how a model is drawn, its regions, what a ray hits |
 | `cli/serve.ml` | 209 | the page's server: the folder's files, the command run, the code watched |
 | `cli/mcp.ml` | 145 | tools for an agent: `picture`, `section`, `clash`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
-| `embed/embed.ml` | 131 | a project built with no OCaml installed: a builder that carries the compiler, loads a project's files itself and builds a function by name, as the project's own program does. Tried on one project; the command does not use it yet |
+| `embed/embed.ml` | 171 | a project built with no OCaml installed: the builder that carries the compiler. It loads a project's files itself, lists its functions, builds one by name, or stays loaded and builds one after another |
+| `tools/release.sh` | | a release assembled: the command, the builder, the interfaces it reads code against, the page, and the kernel's code to read |
 | `web/view.html` | 1174 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
-| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 232 checks (`dune test`, 15 s), and mk49's experiments |
+| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 236 checks (`dune test`, 15 s), and mk49's experiments |
 
 ## Not there
 

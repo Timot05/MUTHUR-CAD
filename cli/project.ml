@@ -52,14 +52,33 @@ let () =
 
 (* ---- A project compiled, and its functions ---- *)
 
+(* The two ways a project's code becomes what it builds. By dune: compiled once into a
+   program of its own, entry.exe, which needs OCaml installed and the tool's source (a
+   design folder's link mk52), and is what an editor's OCaml support reads. Or by the
+   builder (embed/embed.ml), which carries the compiler and needs neither. MK52_BUILDER
+   says which, as dune or carried; unsaid, it is dune wherever dune can do it. *)
+type way = Dune | Carried
+
+let way =
+  lazy
+    (match Sys.getenv_opt "MK52_BUILDER" with
+     | Some "dune" -> Dune
+     | Some "carried" -> Carried
+     | Some other -> failwith (Printf.sprintf "MK52_BUILDER is dune or carried, not %s" other)
+     | None -> if Place.sourced () && is_dir "mk52" && Sys.command "command -v dune > /dev/null 2>&1" = 0 then Dune else Carried)
+
 (* dune on the project's program. Another build of the same folder going on (two
-   commands at once) is waited for. Done once in a run of the command. *)
+   commands at once) is waited for: dune says there is one as "locked the build
+   directory", and since 3.2x, where a second dune asks the first to build for it and is
+   refused, as "Build requests require a watch-mode server". Done once in a run of the
+   command. *)
 let compiled : (string, (unit, string) result) Hashtbl.t = Hashtbl.create 4
 let program project = Printf.sprintf "%s/default/%s/entry.exe" (Filename.concat (Sys.getcwd ()) Place.build) project
 
 let compile project =
   match Hashtbl.find_opt compiled project with
   | Some r -> r
+  | None when Lazy.force way = Carried -> Ok ()  (* nothing to do ahead: the builder reads the files when asked *)
   | None ->
       let log = Filename.temp_file "mk52" ".log" in
       let contains s sub = let n = String.length sub in let rec go i = i + n <= String.length s && (String.sub s i n = sub || go (i + 1)) in go 0 in
@@ -67,7 +86,7 @@ let compile project =
         if Sys.command (Printf.sprintf "dune build --build-dir %s ./%s/entry.exe > %s 2>&1" (Filename.quote (Filename.concat (Sys.getcwd ()) Place.build)) (Filename.quote project) (Filename.quote log)) = 0 then Ok ()
         else
           let why = String.trim (read_file log) in
-          if tries > 0 && contains why "locked the build directory" then (Unix.sleepf 0.5; build (tries - 1)) else Error why
+          if tries > 0 && (contains why "locked the build directory" || contains why "require a watch-mode server") then (Unix.sleepf 0.5; build (tries - 1)) else Error why
       in
       let r = build 120 in
       (try Sys.remove log with _ -> ());
@@ -76,7 +95,7 @@ let compile project =
 
 (* The project's program run: what it printed, or why it failed. It is stopped after
    [limit] seconds, 30 unless said. *)
-let run ?(limit = 30.) project args =
+let run_program ?(limit = 30.) project args =
   let log = Filename.temp_file "mk52" ".log" and out = Filename.temp_file "mk52" ".out" in
   let fd_out = Unix.openfile out [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 and fd_log = Unix.openfile log [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 and null = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
   let pid = Unix.create_process (program project) (Array.of_list ("entry" :: args)) null fd_out fd_log in
@@ -91,6 +110,110 @@ let run ?(limit = 30.) project args =
   (try Sys.remove log with _ -> ());
   (try Sys.remove out with _ -> ());
   r
+
+(* ---- The builder, kept running ---- *)
+
+(* The builder with a project loaded (embed/embed.ml, -serve): started when the project
+   is first asked about, and again whenever the project's files are not the ones it
+   loaded, so that a command that stays (the agents' tools) never builds from old code.
+   What it says of what went wrong goes to its log. *)
+type builder = { pid : int; ask : Unix.file_descr; answer : Unix.file_descr; log : string; loaded : (string * float) list }
+
+let builders : (string, builder) Hashtbl.t = Hashtbl.create 4
+let files project = List.map (fun path -> (path, (Unix.stat path).Unix.st_mtime)) (Place.sources project)
+
+let stop project =
+  Option.iter
+    (fun b ->
+      Hashtbl.remove builders project;
+      (try Unix.kill b.pid Sys.sigkill with Unix.Unix_error _ -> ());
+      (try ignore (Unix.waitpid [] b.pid) with Unix.Unix_error _ -> ());
+      List.iter (fun fd -> try Unix.close fd with Unix.Unix_error _ -> ()) [ b.ask; b.answer ];
+      try Sys.remove b.log with Sys_error _ -> ())
+    (Hashtbl.find_opt builders project)
+
+let () = at_exit (fun () -> List.iter stop (List.of_seq (Hashtbl.to_seq_keys builders)))
+
+(* A line of a builder's answer, waited for at most [limit] seconds. None if none came. *)
+let line (b : builder) limit =
+  let text = Buffer.create 64 and one = Bytes.create 1 and until = Unix.gettimeofday () +. limit in
+  let rec go () =
+    let left = until -. Unix.gettimeofday () in
+    if left <= 0. then None
+    else
+      match Unix.select [ b.answer ] [] [] left with
+      | [], _, _ -> None
+      | _ -> if Unix.read b.answer one 0 1 = 0 then None else if Bytes.get one 0 = '\n' then Some (Buffer.contents text) else (Buffer.add_bytes text one; go ())
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
+  in
+  go ()
+
+(* What a builder has said in its log from a place on. *)
+let said (b : builder) from = let text = read_file b.log in String.trim (String.sub text from (String.length text - from))
+
+let builder project =
+  let now = files project in
+  match Hashtbl.find_opt builders project with
+  | Some b when b.loaded = now -> Ok b
+  | _ -> (
+      stop project;
+      match Place.builder () with
+      | None -> Error "This tool has no builder to read a project's code with (embed/ in its source, bin/mk52-build in a release)."
+      | Some (program, dirs) -> (
+          (* a builder that is gone is found by its answer, not by a signal that ends this command *)
+          Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
+          let log = Filename.temp_file "mk52" ".log" in
+          let ask_r, ask_w = Unix.pipe ~cloexec:true () and answer_r, answer_w = Unix.pipe ~cloexec:true () in
+          let fd_log = Unix.openfile log [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+          let pid = Unix.create_process program (Array.of_list (("mk52-build" :: List.concat_map (fun d -> [ "-I"; d ]) dirs) @ [ project; "-serve" ])) ask_r answer_w fd_log in
+          List.iter Unix.close [ ask_r; answer_w; fd_log ];
+          let b = { pid; ask = ask_w; answer = answer_r; log; loaded = now } in
+          Hashtbl.replace builders project b;
+          match line b 60. with
+          | Some "ready" -> Ok b
+          | _ ->
+              let why = said b 0 in
+              stop project;
+              Error (Printf.sprintf "%s does not build:\n%s" project (if why = "" then "The builder did not start." else why))))
+
+(* The same as the project's program run, asked of the builder: with no argument its
+   functions, with one that function built. A build that goes on longer than [limit]
+   seconds is stopped, and the builder is still there for the next. *)
+let run_builder ?(limit = 30.) project args =
+  match builder project with
+  | Error why -> Error why
+  | Ok b -> (
+      let from = String.length (read_file b.log) in
+      let failed otherwise = Error (match said b from with "" -> otherwise | why -> why) in
+      let ask text = let s = text ^ "\n" in ignore (Unix.write_substring b.ask s 0 (String.length s)) in
+      let gone () = stop project; Error "The builder stopped." in
+      try
+        match args with
+        | [] ->
+            ask "list";
+            let rec names acc = match line b 10. with Some "." -> Ok (String.concat "" (List.rev_map (fun n -> n ^ "\n") acc)) | Some name -> names (name :: acc) | None -> gone () in
+            names []
+        | entry :: _ -> (
+            let out = Filename.temp_file "mk52" ".out" in
+            ask (Printf.sprintf "build %s %s" entry out);
+            let r =
+              match line b 10. with
+              | Some child when String.starts_with ~prefix:"child " child -> (
+                  match line b limit with
+                  | Some "ok" -> Ok (read_file out)
+                  | Some _ -> failed "The function failed."
+                  | None ->
+                      (try Unix.kill (int_of_string (String.sub child 6 (String.length child - 6))) Sys.sigkill with _ -> ());
+                      ignore (line b 5.);
+                      Error (Printf.sprintf "It took more than %.0f s; it was stopped." limit))
+              | Some _ -> failed "The function failed."
+              | None -> gone ()
+            in
+            (try Sys.remove out with Sys_error _ -> ());
+            r)
+      with Unix.Unix_error _ -> gone ())
+
+let run ?limit project args = match Lazy.force way with Dune -> run_program ?limit project args | Carried -> run_builder ?limit project args
 
 (* The project's functions that can be built alone, as <file>.<function>, in the files'
    order. They are written down for the page to list (_mk52/open/). *)
@@ -525,7 +648,8 @@ let create project name =
   if name = "entry" then failwith "a file cannot be called entry: that is the project's own program";
   if project = "" || not (String.for_all ok project) then failwith "a project's name is lower-case letters, digits and _";
   if not (is_dir project) then Sys.mkdir project 0o755;
-  if not (Sys.file_exists (Filename.concat project "dune")) then Out_channel.with_open_bin (Filename.concat project "dune") (fun oc -> output_string oc dune_text);
+  (* how dune compiles it, where dune can: a tool without its source compiles nothing *)
+  if Place.sourced () && not (Sys.file_exists (Filename.concat project "dune")) then Out_channel.with_open_bin (Filename.concat project "dune") (fun oc -> output_string oc dune_text);
   let path = Filename.concat project (name ^ ".ml") in
   if Sys.file_exists path then failwith (path ^ " is already there");
   Out_channel.with_open_bin path (fun oc ->

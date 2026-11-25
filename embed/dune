@@ -4,5 +4,5 @@
 (executable
  (name embed)
  (modes byte byte_complete)
- (libraries mk52 compiler-libs.toplevel)
+ (libraries mk52 unix compiler-libs.toplevel)
  (link_flags (-linkall)))

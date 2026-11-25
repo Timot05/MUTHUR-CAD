@@ -21,7 +21,36 @@
      _mk52/seen                       written while a page is looking
      _mk52/pictures/<model>.png       the last picture made of it
      _mk52/meshes/<model>.stl         its surface as triangles, as last meshed *)
-let home () = Option.value ~default:"." (Sys.getenv_opt "MK52_HOME")
+(* Where the tool is: where it is said to be (MK52_HOME, which the tool's own script
+   sets), or, for a released tool, the folder that holds bin/ with the command in it and
+   web/ with the page. *)
+let home () =
+  match Sys.getenv_opt "MK52_HOME" with
+  | Some h -> h
+  | None ->
+      let up = Filename.dirname (Filename.dirname Sys.executable_name) in
+      if Sys.file_exists (Filename.concat up "web/view.html") then up else "."
+
+(* Whether the tool is here with its source: then a design's code can be compiled
+   against the kernel by dune. A released tool is not. *)
+let sourced () = Sys.file_exists (Filename.concat (home ()) "lib/dune")
+
+(* The builder that carries the compiler (embed/), and the folders of compiled
+   interfaces it is given. A released tool has them beside the command; in the tool's
+   source they are where dune builds them, and the standard library's are the installed
+   OCaml's own, which the builder finds by itself. None where there is no builder. *)
+let builder () =
+  let at p = Filename.concat (home ()) p in
+  if Sys.file_exists (at "bin/mk52-build") then Some (at "bin/mk52-build", [ at "interfaces/kernel"; at "interfaces/ocaml" ])
+  else if Sys.file_exists (at "_build/default/embed/embed.bc.exe") then Some (at "_build/default/embed/embed.bc.exe", [ at "_build/default/lib/.mk52.objs/byte" ])
+  else None
+
+(* What runs the tool: with its source, its script, which builds it first; released, the
+   command itself. *)
+let command () = if sourced () then Filename.concat (home ()) "mk52" else Sys.executable_name
+
+(* What marks a folder as a design folder where the tool has no source to compile against. *)
+let marker = "mk52.design"
 
 (* The projects are compiled where dune compiles by default, _build/: an editor's OCaml
    support reads what it knows of a file from there, and with the projects built
@@ -30,7 +59,11 @@ let build = "_build"
 
 (* The design folder's projects, and a project's code: its .ml files, each by its path. *)
 let is_dir p = try Sys.is_directory p with Sys_error _ -> false
-let projects () = List.filter (fun p -> p <> "mk52" && p.[0] <> '_' && p.[0] <> '.' && is_dir p && Sys.file_exists (Filename.concat p "dune")) (List.sort compare (Array.to_list (Sys.readdir ".")))
+(* A project has a dune file, which says how it is compiled; in a design folder made by a
+   released tool, which compiles nothing, it is any folder with .ml files in it. *)
+let projects () =
+  let code p = Sys.file_exists (Filename.concat p "dune") || (Sys.file_exists marker && Array.exists (fun f -> Filename.check_suffix f ".ml") (Sys.readdir p)) in
+  List.filter (fun p -> p <> "mk52" && p.[0] <> '_' && p.[0] <> '.' && is_dir p && code p) (List.sort compare (Array.to_list (Sys.readdir ".")))
 
 let rec sources dir =
   List.concat_map

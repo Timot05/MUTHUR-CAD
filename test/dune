@@ -1,3 +1,7 @@
 (test
  (name test)
- (libraries mk52 models))
+ (libraries mk52 models unix)
+ ; the builder, and the kernel's compiled interfaces it reads a project against
+ (deps
+  %{exe:../embed/embed.bc.exe}
+  (glob_files ../lib/.mk52.objs/byte/*.cmi)))
