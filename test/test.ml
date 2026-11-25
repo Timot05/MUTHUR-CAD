@@ -480,6 +480,24 @@ let skins () =
     (v [| 0.; 0.; 5. |] < -1. && Float.abs (v [| 5.; 0.; 5. |]) < 1e-9 && Float.abs (v [| 2.; 0.; 5. |] +. 3.) < 1e-9 && Float.abs (v [| 0.; 7.; 5. |] -. 2.) < 1e-9 && Float.abs (v [| 1.; 0.; 10. |]) < 1e-9)
     (Printf.sprintf "on the axis %.4f, on the side %.2g, 3 inside it %.4f, 2 outside it %.4f, on the head %.2g" (v [| 0.; 0.; 5. |]) (v [| 5.; 0.; 5. |]) (v [| 2.; 0.; 5. |]) (v [| 0.; 7.; 5. |]) (v [| 1.; 0.; 10. |]))
 
+(* A group (Graph.group): a name around features. It may build anything; the features
+   made in it are under it, named within it; alone, it is those features together. *)
+let groups () =
+  let pos = ("test", 0, 0, 0) in
+  let ball x () = Solid.sphere "ball" (x, 0., 0.) 1. in
+  let left, right = Graph.group pos "pair" (fun () -> (Graph.feature pos "left" (ball (-3.)), Graph.feature pos "right" (ball 3.))) in
+  let by name = List.find (fun (f : Graph.feature) -> f.path = name) !Graph.features in
+  let pair = by "pair" and l = by "pair/left" and r = by "pair/right" in
+  check "groups: the features made in a group are under it, and named within it" (pair.group && (not l.group) && l.parent = pair.fid && r.parent = pair.fid) (Printf.sprintf "parents %d and %d, the group %d" l.parent r.parent pair.fid);
+  let value g x = let p = Prog.compile g in Prog.value p (Prog.ctx p) (Prog.whole p) x in
+  check "groups: what the function builds is handed on as it is" (value left [| -3.; 0.; 0. |] < 0. && value right [| -3.; 0.; 0. |] > 0.) "";
+  let whole = Option.get pair.result in
+  check "groups: alone, a group is its features together"
+    (Float.abs (value whole [| -3.; 0.; 0. |] +. 1.) < 1e-9 && Float.abs (value whole [| 3.; 0.; 0. |] +. 1.) < 1e-9 && value whole [| 0.; 0.; 0. |] > 0.)
+    (Printf.sprintf "%.3f, %.3f, %.3f" (value whole [| -3.; 0.; 0. |]) (value whole [| 3.; 0.; 0. |]) (value whole [| 0.; 0.; 0. |]));
+  let empty = Graph.group pos "nothing in it" (fun () -> 3) in
+  check "groups: one with no feature in it has no solid" (empty = 3 && (by "nothing in it").result = None) ""
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -498,4 +516,5 @@ let () =
   clashes ();
   builder ();
   skins ();
+  groups ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

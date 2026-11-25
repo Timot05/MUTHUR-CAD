@@ -114,9 +114,9 @@ let colour = function Some (r, g, b) -> Json.Arr [ num r; num g; num b ] | None 
 
 let coloured (m : Emit.t) = Emit.coloured m.built.features
 
-(* A feature: where it is defined, the frame it sits in if it has one (its origin and
-   three axes, in the world), its colour if it has one, and the faces it made with the
-   numbers the shader gives them. *)
+(* A feature: where it is defined, whether it is a group, the frame it sits in if it has
+   one (its origin and three axes, in the world), its colour if it has one, and the faces
+   it made with the numbers the shader gives them. *)
 let feature ?(faces = []) ?paint (f : Graph.feature) =
   let frame =
     match f.frame with
@@ -124,7 +124,7 @@ let feature ?(faces = []) ?paint (f : Graph.feature) =
     | Some fr -> Json.Obj [ ("o", vec fr.t); ("x", vec (Frame.direction fr [| 1.; 0.; 0. |])); ("y", vec (Frame.direction fr [| 0.; 1.; 0. |])); ("z", vec (Frame.direction fr [| 0.; 0.; 1. |])) ]
   in
   Json.Obj
-    [ ("id", int f.fid); ("name", Json.Str f.fname); ("path", Json.Str f.path); ("file", Json.Str f.file); ("line", int f.line); ("parent", int f.parent); ("frame", frame); ("colour", colour paint);
+    [ ("id", int f.fid); ("name", Json.Str f.fname); ("path", Json.Str f.path); ("file", Json.Str f.file); ("line", int f.line); ("parent", int f.parent); ("group", Json.Bool f.group); ("frame", frame); ("colour", colour paint);
       ("faces", Json.Arr (List.map (fun (name, id) -> Json.Obj [ ("name", Json.Str name); ("id", int id) ]) faces)) ]
 
 (* Each feature's own faces: the pieces it made, by the name within the feature. *)

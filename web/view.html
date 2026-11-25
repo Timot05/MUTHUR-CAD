@@ -65,7 +65,7 @@
   .head:hover { background: var(--hover); }
   .sum { margin-left: auto; min-width: 0; font: var(--small) var(--mono); letter-spacing: 0; text-transform: none; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chev { width: 6px; height: 6px; flex: none; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); color: var(--ink-2); }
-  .open > .head .chev { transform: translateY(-2px) rotate(45deg); }
+  .open > .head .chev, .fold.open .chev { transform: translateY(-2px) rotate(45deg); }
   .body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--s1) 0 var(--s3); }
   .panel:not(.open) .body { display: none; }
   @media (prefers-reduced-motion: no-preference) { .chev { transition: transform .12s; } }
@@ -95,6 +95,12 @@
   .row:hover .acts, .row:focus-within .acts, .acts:has(.on) { display: flex; }
   .row.on .acts { background: var(--accent-wash); }
   .row.feat .acts { right: calc(var(--s3) + 2 * 22px + var(--s1)); }
+  /* before a feature's name: the mark that opens and shuts what is made inside it, or
+     as much room where nothing is */
+  .fold { all: unset; box-sizing: border-box; flex: none; display: grid; place-items: center; width: 16px; height: 22px; margin-right: calc(-1 * var(--s1)); cursor: pointer; }
+  .fold:hover .chev { color: var(--ink); }
+  .fold:disabled { visibility: hidden; }
+  .row.group .name { font-weight: 650; }
   /* a row's switches: small squares that are always there, ink when on */
   .tog { all: unset; box-sizing: border-box; flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin-right: calc(-1 * var(--s1)); color: var(--ink-3); cursor: pointer; }
   .tog + .tog { margin-left: calc(-1 * var(--s1)); }
@@ -1279,24 +1285,33 @@ function panel() {
 
   // each feature followed by the ones made inside it, in the order the code made them;
   // clicking one picks it out (the rest of the model greys), and under it then, its faces.
-  // At its right end, two switches: shown (off: taken out of the model) and alone.
+  // Before its name, the mark that shuts and opens what is inside it. At its right end,
+  // two switches: shown (off: taken out of the model) and alone.
   const rows = []
   if (scene) {
-    const ids = new Set(scene.features.map(f => f.id))
-    const under = (parent, deep) => scene.features.filter(f => parent == null ? !ids.has(f.parent) : f.parent == parent).forEach(f => {
-      const on = feature == f.id, out = hidden.has(f.id), within = !out && gone(f.id)
-      rows.push(row('feat' + (on ? ' on' : '') + (out || within ? ' out' : ''), () => { if (gone(f.id)) return; face = -1; feature = on ? 0 : f.id; lay(); panel(); changed() },
-        el('span', { className: 'name', style: `padding-left: ${12 * deep}px`, title: f.path }, f.name), el('span', { className: 'meta', title: 'Faces it made' }, f.faces.length),
+    const ids = new Set(scene.features.map(f => f.id)), tops = scene.features.filter(f => !ids.has(f.parent))
+    const inside = new Map()
+    for (const f of scene.features) if (ids.has(f.parent)) inside.set(f.parent, [...(inside.get(f.parent) ?? []), f])
+    // open unless shut: a model's one part to begin with; in an assembly, the parts are listed shut
+    const folds = kept.folds?.[scene.name] ?? {}, open = f => folds[f.path] ?? (tops.length == 1 && tops[0] == f)
+    const fold = (which, to) => { for (const f of which) folds[f.path] = to; keep('folds', { ...kept.folds, [scene.name]: folds }); panel() }
+    const under = (features, deep) => features.forEach(f => {
+      const on = feature == f.id, out = hidden.has(f.id), within = !out && gone(f.id), kids = inside.get(f.id) ?? []
+      const mark = el('button', { className: 'fold' + (open(f) ? ' open' : ''), style: `margin-left: ${12 * deep}px`, disabled: !kids.length, title: open(f) ? 'Shut what is made inside it' : 'Open what is made inside it', ariaExpanded: String(open(f)), onclick: e => { e.stopPropagation(); fold([f], !open(f)) } }, el('i', { className: 'chev' }))
+      rows.push(row('feat' + (f.group ? ' group' : '') + (on ? ' on' : '') + (out || within ? ' out' : ''), () => { if (gone(f.id)) return; face = -1; feature = on ? 0 : f.id; lay(); panel(); changed() },
+        mark, el('span', { className: 'name', title: f.path }, f.name), f.group ? el('span', { className: 'meta', title: 'Features in the group' }, kids.length) : el('span', { className: 'meta', title: 'Faces it made' }, f.faces.length),
         el('span', { className: 'acts' }, source(f)),
         toggle(out ? 'hidden' : 'shown', out ? 'Put it back in the model' : within ? 'Out with a feature around it' : 'Take it out of the model', !out, () => shown(f.id), within),
         toggle('alone', solo == f.id ? 'Show the whole model again' : 'Show this feature alone', solo == f.id, () => alone(solo == f.id ? 0 : f.id))))
-      if (on) for (const made of f.faces) rows.push(row('face' + (face == made.id ? ' on' : ''), () => { face = face == made.id ? -1 : made.id; panel(); changed() }, el('span', { className: 'name', style: `padding-left: ${12 * deep + 16}px` }, made.name)))
-      under(f.id, deep + 1)
+      if (on) for (const made of f.faces) rows.push(row('face' + (face == made.id ? ' on' : ''), () => { face = face == made.id ? -1 : made.id; panel(); changed() }, el('span', { className: 'name', style: `padding-left: ${12 * deep + 28}px` }, made.name)))
+      if (open(f)) under(kids, deep + 1)
     })
+    const nested = scene.features.filter(f => inside.has(f.id))
     rows.push(row('feat whole' + (feature == 0 && solo == 0 ? ' front' : ''), () => { deselect(); alone(0) }, el('span', { className: 'name' }, 'Whole model'), hidden.size ? el('span', { className: 'meta' }, `${hidden.size} out`) : null,
+      nested.length ? el('span', { className: 'acts' }, action('Open all', 'Open every feature', false, () => fold(nested, true)), action('Shut all', 'Shut every feature', false, () => fold(nested, false))) : null,
       toggle(hidden.size ? 'hidden' : 'shown', hidden.size ? 'Put every feature back' : 'Every feature is in the model', !hidden.size, () => shown(0)),
       toggle('alone', solo == 0 ? 'The whole model is shown' : 'Show the whole model again', solo == 0, () => alone(0))))
-    under(null, 0)
+    under(tops, 0)
   }
   $('features').querySelector('.sum').textContent = scene?.name ?? ''
   $('features').querySelector('.body').replaceChildren(...(rows.length ? rows : [el('p', { className: 'empty' }, current ? 'Its shader is being made ready.' : 'Of the model in front.')]))

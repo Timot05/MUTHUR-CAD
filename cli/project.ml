@@ -425,11 +425,12 @@ let plane (m : Emit.t) (k : cut) : Render.cut =
   let (left, right), (bottom, top) = (Option.value ~default:across (said a), Option.value ~default:up (said b)) in
   { axis = k.axis; at = k.at; left; right; bottom; top }
 
-(* A model's parts are its features that are in no other: the part a feature is in. *)
+(* A model's parts are its features that are in no other, a group around them not
+   counted: the part a feature is in, 0 if it is in none. *)
 let part_of (m : Emit.t) =
   let by = Hashtbl.create 64 in
   List.iter (fun (f : Graph.feature) -> Hashtbl.replace by f.fid f) m.built.features;
-  let rec top fid = match Hashtbl.find_opt by fid with Some f when Hashtbl.mem by f.parent -> top f.parent | Some f -> f.fid | None -> 0 in
+  let rec top fid = match Hashtbl.find_opt by fid with None -> 0 | Some f -> ( match top f.parent with 0 -> if f.group then 0 else f.fid | part -> part) in
   (top, fun id -> match Hashtbl.find_opt by id with Some f -> f.fname | None -> "what is in no feature")
 
 (* A part's colour in a cut: its own in the model if [paint] and it has one, else one

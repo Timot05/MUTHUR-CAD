@@ -40,7 +40,10 @@ and node =
    same shape built twice gives different faces. Feature 0 is "no feature".
 
    A feature may sit in a frame, given in the frame of the feature around it: that is a
-   forward chain. Everything built inside is built in that frame. *)
+   forward chain. Everything built inside is built in that frame.
+
+   A group is a feature that is only a name around others: it builds no solid of its
+   own, and what it holds are parts of whatever it is in, as if it were not there. *)
 type feature = {
   fid : int;
   fname : string;
@@ -50,7 +53,8 @@ type feature = {
   parent : int;
   frame : Frame.t option;  (** in the world *)
   colour : Colour.t option;  (** its own: what is made inside it is that colour too, unless it has one of its own *)
-  mutable result : t option;
+  group : bool;
+  mutable result : t option;  (** what it built; of a group, the features in it together *)
 }
 
 let features : feature list ref = ref []
@@ -75,19 +79,24 @@ let within frame build =
   coords := Some (Frame.coords !ambient);
   Fun.protect ~finally:(fun () -> ambient := fst saved; coords := snd saved) build
 
-(* [feature __POS__ "name" (fun () -> ...)]: the graph the function builds, as a feature,
-   in [frame] if one is given, and of [colour] ("#rrggbb") if one is given. *)
-let feature ?frame ?colour (file, line, _, _) fname build =
+(* What [build] makes, made in a feature of that name, in [frame] if one is given and of
+   [colour] ("#rrggbb") if one is given. [result]: the feature's solid, from what was
+   built. *)
+let named ?frame ?colour ~group (file, line, _, _) fname build result =
   let run () =
     let colour = Option.map Colour.of_string colour in
-    let f = { fid = List.length !features + 1; fname; path = prefix () ^ fname; file; line; parent = !current; frame = Option.map (fun _ -> !ambient) frame; colour; result = None } in
+    let f = { fid = List.length !features + 1; fname; path = prefix () ^ fname; file; line; parent = !current; frame = Option.map (fun _ -> !ambient) frame; colour; group; result = None } in
     features := f :: !features;
     current := f.fid;
-    let g = Fun.protect ~finally:(fun () -> current := f.parent) build in
-    f.result <- Some g;
-    g
+    Fun.protect ~finally:(fun () -> current := f.parent) (fun () ->
+        let built = build () in
+        f.result <- result f built;
+        built)
   in
   match frame with Some fr -> within fr run | None -> run ()
+
+(* [feature __POS__ "name" (fun () -> ...)]: the graph the function builds, as a feature. *)
+let feature ?frame ?colour pos fname build = named ?frame ?colour ~group:false pos fname build (fun _ g -> Some g)
 
 (* As given: no feature's name in front, no frame. For rebuilding nodes that exist. *)
 let raw_piece ?(lip = 1.) name field = mk ~lip ~jump:0. (Piece { name; field })
@@ -112,6 +121,13 @@ let intersection a b = select ~guard:(diff a b) ~le:b ~gt:a ()
 let offset r a = apply ~naming:(Keep 0) ~lip:a.lip (E.sub x0 (E.const r)) [ a ]
 let complement a = apply ~naming:(Keep 0) ~lip:a.lip (E.neg x0) [ a ]
 let subtract a b = intersection a (complement b)
+
+(* [group __POS__ "name" (fun () -> ...)]: the features the function makes, under one
+   name. It may build anything: a list of parts, a body and what is cut from it. Shown
+   alone, a group is the features made in it, together. *)
+let group ?frame ?colour pos fname build =
+  named ?frame ?colour ~group:true pos fname build (fun f _ ->
+      match List.rev (List.filter_map (fun x -> if x.parent = f.fid then x.result else None) !features) with [] -> None | first :: rest -> Some (List.fold_left union first rest))
 
 (* Polynomial smooth union of width k: with d = b - a and h = (d + k) / 2k,
    blend = h a + (1 - h) b - k h (1 - h) where |d| < k, and min (a, b) outside. The

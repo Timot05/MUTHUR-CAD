@@ -12,7 +12,7 @@ It is an implicit kernel: a solid is a function of space, negative inside and po
 
 ## What it does
 
-- **Parts as code.** A part is a function that returns a solid. Features are named, nest, and sit in frames, so a feature is moved by moving its frame.
+- **Parts as code.** A part is a function that returns a solid. Features are named, nest, and sit in frames, so a feature is moved by moving its frame. Features that belong together are put in a group, which the page opens, shuts, hides and shows as one.
 - **A page that follows your editor.** Every time a file is saved the project is built again and the page redraws what is open, on the graphics card.
 - **Pictures and cuts without the page.** `mk52 picture` and `mk52 section` are made by the kernel itself, so they work in a terminal, in a script, or for an AI agent.
 - **Checks.** `mk52 clash` says which parts of an assembly run into each other, touch, or come too near. `mk52 skins` finds faces of no thickness, where a cut did not go quite far enough. `mk52 extract` finds every edge and corner and flags what looks unintended.
@@ -84,7 +84,7 @@ Save the file and the page redraws:
 Three things in it are the whole idea:
 
 - **A sketch** is an outline of lines and arcs, each side with a name, that is pulled straight (`Sketch.extrude`) or turned about an axis (`Sketch.revolve`). Its sides become the solid's faces, by those names.
-- **A feature** (`Graph.feature`) is a named step of the part. It can have a colour and a frame: the boss is drawn about its own origin and then put at (-8, 0, 6).
+- **A feature** (`Graph.feature`) is a named step of the part. It can have a colour and a frame: the boss is drawn about its own origin and then put at (-8, 0, 6). Features made inside a feature are listed under it. **A group** (`Graph.group`) is a name around features that builds no solid of its own, so its function may return anything: `Graph.group __POS__ "holes" (fun () -> List.map hole places)` gives the list of holes back, and lists them under "holes".
 - **Solids combine** with `Graph.union`, `Graph.intersection` and `Graph.subtract`.
 
 Every function that takes `()` and returns a solid can be looked at on its own, so `lamp.base.plate` and `lamp.base.boss` are models too, beside `lamp.base` itself.
@@ -117,7 +117,7 @@ What there is to build with is the kernel's own code, which a design folder reac
 |---|---|
 | `Sketch` (`lib/sketch.ml`) | outlines of lines and arcs, pulled, turned, or lofted through sections; holes as loops of their own; chamfers |
 | `Solid` (`lib/solid.ml`) | plane, sphere, cylinder, cone, torus |
-| `Graph` (`lib/graph.ml`) | union, intersection, subtract, offset, rounded unions and intersections (fillets), features |
+| `Graph` (`lib/graph.ml`) | union, intersection, subtract, offset, rounded unions and intersections (fillets), features and groups |
 | `Frame` (`lib/frame.ml`) | where a feature sits: translate, rotate, and chains of them |
 | `Asset` (`lib/asset.ml`) | a STEP or STL file shown with the model |
 | `Clash` (`lib/clash.ml`) | `Clash.allow "a part" "another"`: these two are meant to touch |
