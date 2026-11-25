@@ -12,6 +12,8 @@
                                      bring to the front, and what the last build said
      GET  /scene?name=&solo=         how a model is drawn (mk52 scene)
      GET  /gates?name=&solo=         where its shader's gates are entered: the table
+     GET  /regions?name=&solo=&most= the model cut into at most so many regions, a shader
+                                     each (mk52 regions)
      GET  /edges?name=               its edges and corners, or null
      GET  /pick?name=&solo=&ray=     what a ray hits (mk52 pick): ox,oy,oz,dx,dy,dz
      POST /view /close /extract ?name=   the command of that name, for the person
@@ -150,6 +152,9 @@ let answer port r =
   | "GET", "/look" -> (json, Json.to_string (look ()))
   | "GET", "/scene" -> asked [ "scene"; name (); string_of_int (solo ()) ]
   | "GET", "/gates" -> ("application/octet-stream", file (Place.gates (name ()) (solo ())))
+  | "GET", "/regions" ->
+      let most = match int_of_string_opt (param "most") with Some n when n >= 1 && n <= 4096 -> n | _ -> refuse "400 Bad Request" "most is a number of regions" in
+      asked [ "regions"; name (); string_of_int (solo ()); string_of_int most ]
   | "GET", "/edges" -> (json, try read (Place.edges (name ())) with Sys_error _ -> "null")
   | "GET", "/pick" ->
       let ray = String.split_on_char ',' (param "ray") in

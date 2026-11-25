@@ -33,8 +33,9 @@
 
    and four the page is served with: serve is its server (cli/serve.ml), which runs the
    others; refresh [<project> ...] builds projects again and each of their open models;
-   scene <model> [<feature>] prints how a model is drawn; pick <model> <feature> ox oy oz
-   dx dy dz prints what a ray hits.
+   scene <model> [<feature>] prints how a model is drawn; regions <model> <feature>
+   <most> prints it cut into regions, a shader each; pick <model> <feature> ox oy oz dx
+   dy dz prints what a ray hits.
 
    A model is a function that builds a solid on its own: <project>.<file>.<function>, or
    <project>.<file> for a file's graph or its only function (cli/project.ml); or one of
@@ -197,6 +198,7 @@ let () =
         Out_channel.with_open_bin out (fun oc -> output_string oc png);
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
     | "scene" :: name :: solo -> print_endline (Json.to_string (Scene.scene name (match solo with [ f ] -> int_of_string f | _ -> 0)))
+    | [ "regions"; name; solo; most ] -> print_endline (Json.to_string (Scene.regions name (int_of_string solo) (int_of_string most)))
     | "pick" :: name :: solo :: ray -> (
         match List.map float_of_string ray with
         | [ ox; oy; oz; dx; dy; dz ] -> print_endline (Json.to_string (Scene.pick name (int_of_string solo) [| ox; oy; oz |] [| dx; dy; dz |]))

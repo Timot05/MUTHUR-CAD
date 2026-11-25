@@ -69,16 +69,15 @@ let sketch (d : Sketch.drawn) =
   let span (s : Sketch.span) = Json.Obj [ ("name", Json.Str s.name); ("points", Json.Arr (List.map world (Sketch.points s))) ] in
   Json.Obj [ ("feature", int d.feature); ("turned", Json.Bool d.turned); ("loops", Json.Arr (List.map (fun l -> Json.Arr (Array.to_list (Array.map span l))) d.loops)) ]
 
-(* How the page draws the model: its box, its shader, where the shader's gates are
-   entered (a file of 32-bit words, little-endian: Shader.decisions, which the page asks
-   the server for), its features and its sketches. *)
+(* How the page draws the model: its box, its features and its sketches, and the model
+   itself as a shader of its own, with where that shader's gates are entered (Shader): a
+   file of 32-bit words, little-endian, which the page asks the server for. *)
 let scene name solo =
   let m, graph = shown name solo in
   let p = Prog.compile graph in
   let s = Shader.model p p.root in
   let g = Shader.decisions p (Prog.ctx p) s ~lo:m.lo ~hi:m.hi in
-  let table = Place.gates name solo in
-  Out_channel.with_open_bin table (fun oc -> output_bytes oc g.table);
+  Out_channel.with_open_bin (Place.gates name solo) (fun oc -> output_bytes oc g.table);
   let faces = faces_of m p graph in
   Json.Obj
     [ ("name", Json.Str name); ("solo", int solo); ("lo", vec m.lo); ("hi", vec m.hi); ("step", num (1. /. graph.lip)); ("nodes", int p.nodes); ("selects", int (Prog.selects p));
@@ -87,6 +86,18 @@ let scene name solo =
       ("sketches", Json.Arr (List.map sketch m.built.sketches));
       ("shader", Json.Str s.text);
       ("gates", Json.Obj [ ("lo", vec g.lo); ("cell", num g.cell); ("cells", Json.Arr (Array.to_list (Array.map int g.cells))); ("width", int Shader.width) ]) ]
+
+(* The model cut into regions for the page's other way of drawing (Region), made when
+   that is asked for: each shader's text with how many operations it is, and each
+   region as seven numbers, where its box starts and ends and which shader is its own. *)
+let regions name solo most =
+  let m, graph = shown name solo in
+  let p = Prog.compile graph in
+  let r = Region.cut ~most p (Prog.ctx p) ~lo:m.lo ~hi:m.hi in
+  Json.Obj
+    [ ("operations", int r.total);
+      ("shaders", Json.Arr (Array.to_list (Array.map (fun ((made : Region.program), text) -> Json.Obj [ ("text", Json.Str text); ("operations", int (Array.length made.steps)) ]) r.shaders)));
+      ("regions", Json.Arr (List.concat_map (fun (g : Region.region) -> List.map num (Array.to_list g.lo @ Array.to_list g.hi) @ [ int g.shader ]) (Array.to_list r.regions))) ]
 
 (* What the ray from o along d hits: sphere tracing inside the model's box, as the
    shader does, then the full evaluation at the point reached. *)

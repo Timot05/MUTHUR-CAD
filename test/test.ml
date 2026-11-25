@@ -257,6 +257,60 @@ let gates name least =
     (!wrong = 0 && !skipped > 0)
     (Printf.sprintf "the field differs at %d of %d points; %d selects were skipped" !wrong points !skipped)
 
+(* ---- A pulled sketch's chamfers ---- *)
+
+(* A square of 20 pulled 10 high, its upper edge chamfered by 2 and its lower by 1: at
+   random points the solid is the one that description gives, and between random pairs
+   of points the field never changes by more than they are apart. *)
+let chamfers () =
+  let square = Sketch.polygon [ (-10., -10.); (10., -10.); (10., 10.); (-10., 10.) ] in
+  let p = Prog.compile (Sketch.extrude ~chamfer_lo:1. ~chamfer_hi:2. ~lo:0. ~hi:10. square) in
+  let c = Prog.ctx p and whole = Prog.whole p in
+  Random.init 3;
+  let point () = [| Random.float 26. -. 13.; Random.float 26. -. 13.; Random.float 14. -. 2. |] in
+  let wrong = ref 0 and steep = ref 0 in
+  for _ = 1 to 20_000 do
+    let x = point () and y = point () in
+    let v = Prog.value p c whole x in
+    let d = Float.max (Float.abs x.(0)) (Float.abs x.(1)) -. 10. in
+    let inside = d <= 0. && x.(2) >= 0. && x.(2) <= 10. && d +. x.(2) -. 8. <= 0. && d +. 1. -. x.(2) <= 0. in
+    if Float.abs v > 1e-9 && inside <> (v < 0.) then incr wrong;
+    let apart = sqrt (((x.(0) -. y.(0)) ** 2.) +. ((x.(1) -. y.(1)) ** 2.) +. ((x.(2) -. y.(2)) ** 2.)) in
+    if Float.abs (v -. Prog.value p c whole y) > apart +. 1e-9 then incr steep
+  done;
+  check "chamfers: a pulled square with both edges cut" (!wrong = 0 && !steep = 0) (Printf.sprintf "the solid is wrong at %d points; the field is too steep between %d pairs" !wrong !steep)
+
+(* ---- The regions the page draws ---- *)
+
+(* A region's program (Region) must give the model's field anywhere in its box: at
+   random points of every region, it does. The regions must also hold all the surface:
+   a point where the field is nearly nothing is in one of them. *)
+let regions name most =
+  let lo, hi, g = Models.Sets.find name in
+  let h = hold ~lo ~hi (g ()) in
+  let r = Region.cut ~most h.p h.c ~lo ~hi in
+  Random.init 5;
+  let within (g : Region.region) x = x.(0) >= g.lo.(0) && x.(1) >= g.lo.(1) && x.(2) >= g.lo.(2) && x.(0) <= g.hi.(0) && x.(1) <= g.hi.(1) && x.(2) <= g.hi.(2) in
+  let wrong = ref 0 and furthest = ref 0. and outside = ref 0 in
+  Array.iter
+    (fun (g : Region.region) ->
+      for _ = 1 to 200 do
+        let x = Array.init 3 (fun a -> g.lo.(a) +. Random.float (g.hi.(a) -. g.lo.(a))) in
+        let model = (probe h x).d.v in
+        let off = Float.abs (Region.run (fst r.shaders.(g.shader)) x -. model) in
+        furthest := Float.max !furthest off;
+        if not (off <= 1e-9 *. (1. +. Float.abs model)) then incr wrong
+      done)
+    r.regions;
+  for _ = 1 to 20_000 do
+    let x = Array.init 3 (fun a -> lo.(a) +. Random.float (hi.(a) -. lo.(a))) in
+    if Float.abs (probe h x).d.v < 1e-3 *. h.diag && not (Array.exists (fun g -> within g x) r.regions) then incr outside
+  done;
+  check
+    (Printf.sprintf "%s: cut into %d regions, %d shaders" name (Array.length r.regions) (Array.length r.shaders))
+    (!wrong = 0 && !outside = 0 && Array.length r.regions > 0)
+    (Printf.sprintf "the field differs at %d points of the regions, by %g at most; %d points near the surface are in no region" !wrong !furthest !outside)
+
 (* The shapes the README says are still beyond the extractor at some cell size. *)
 let hard = [ "villarceau"; "plane-through-edge"; "coplanar-boxes" ]
 
@@ -270,4 +324,6 @@ let () =
     [ ("arm", (48, 82, 10)); ("bracket", (36, 65, 11)) ];
   List.iter (fun (name, depth) -> mesh name depth) [ ("cube-three-fillets", 5); ("pyramid", 5); ("cube-hole", 5); ("bracket", 5); ("block", 6); ("arm", 6) ];
   List.iter (fun (name, least) -> gates name least) [ ("bracket", 240); ("bracket", 40); ("block", 40); ("arm", 40); ("pyramid", 40) ];
+  List.iter (fun name -> List.iter (regions name) [ 1; 40; 400 ]) [ "bracket"; "block"; "arm"; "pyramid"; "cube-fillet"; "torus" ];
+  chamfers ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

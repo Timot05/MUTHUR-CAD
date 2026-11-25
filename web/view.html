@@ -62,7 +62,7 @@
   #said { max-height: 170px; margin: 0; overflow: auto; color: var(--bad); white-space: pre-wrap; font: 12px/1.35 ui-monospace, monospace; user-select: text; }
 
   /* ---- Over the picture ---- */
-  #viewbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 10px rgba(0, 0, 0, .10); }
+  #viewbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); gap: 2px; padding: 3px; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 10px rgba(0, 0, 0, .10); }
   #viewbar button { all: unset; box-sizing: border-box; height: 26px; padding: 0 11px; border-radius: 6px; color: var(--soft); white-space: nowrap; cursor: pointer; }
   #viewbar button:hover { color: var(--ink); background: var(--hover); }
   #viewbar button[aria-pressed="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 16%, transparent); }
@@ -71,6 +71,10 @@
   #clicked { position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px); display: flex; align-items: baseline; gap: 10px; padding: 6px 11px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .08); }
   #clicked b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #clicked span { color: var(--soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* what a map's colours stand for: a bar of them, its marks, and a line of words */
+  #legend { position: absolute; right: 12px; top: 12px; width: 260px; padding: 9px 11px 8px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .08); color: var(--soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #legend i { display: block; height: 10px; border-radius: 3px; }
+  #legend div { display: flex; justify-content: space-between; margin: 3px 0 2px; }
   #notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--soft); text-align: center; pointer-events: none; }
 </style>
 
@@ -84,6 +88,7 @@
   <canvas tabindex="0" aria-label="The model"></canvas>
   <div id="notice" hidden></div>
   <div id="clicked" hidden></div>
+  <div id="legend" hidden></div>
   <div id="viewbar">
     <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found">Edges</button>
     <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
@@ -91,6 +96,12 @@
     <hr>
     <button id="extract" title="Find the model's edges and corners (mk52 extract) and draw them">Find edges</button>
     <button id="fit" title="Fit the model in the picture (F)">Fit</button>
+    <hr>
+    <button id="regional" aria-pressed="false" title="How the model is drawn. Off: by one shader compiled for the whole of it, which skips at its gates. On: cut into regions, each drawn as its box by a short shader of its own.">Regions</button>
+    <button id="gated" aria-pressed="true" title="Whether the shader skips what its gates say cannot matter. Off, every gate is entered everywhere: the time a picture then takes is what skipping saves.">Gates</button>
+    <button id="mapCost" aria-pressed="false" title="In place of the picture: what each pixel cost, in whole evaluations of the model">Cost</button>
+    <button id="mapSteps" aria-pressed="false" title="In place of the picture: how many times each pixel's ray evaluated the model">Steps</button>
+    <button id="mapShare" aria-pressed="false" title="In place of the picture: how much of the model an evaluation ran, along each pixel's ray">Share</button>
   </div>
 </main>
 
@@ -166,18 +177,44 @@ struct Uniforms {
   cells: vec4i,                                         // the grid's cells along x, y and z
   chosen: vec4i,                                        // the feature picked out, the last feature made in it, the face picked out (-1: none)
   project: mat4x4f,                                     // the world to the picture, for what is drawn over the model
-  line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel
+  line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel;
+                                                        // a map: which one, and the operations in the whole model
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var table: texture_2d<u32>;      // where the model's gates are entered
+`
+// What the model's own compiled shader is given besides: where its gates are entered.
+const tabled = `@group(0) @binding(1) var table: texture_2d<u32>;
 `
 
-// The model: a ray a pixel, marched through the kernel's model().
-const marching = `
+// One triangle over the whole picture, and what a pixel of it comes to.
+const framing = `
 @vertex fn whole(@builtin(vertex_index) id: u32) -> @builtin(position) vec4f {
   return vec4f(vec2f(f32((id << 1u) & 2u), f32(id & 2u)) * 2.0 - 1.0, 0.0, 1.0);
 }
 struct Seen { @location(0) colour: vec4f, @builtin(frag_depth) depth: f32 }
+// A point's depth as the projection writes it.
+fn deep(h: vec3f) -> f32 { return clamp(u.depth.z / (u.depth.z - u.depth.y) * (1.0 - u.depth.y / dot(h - u.eye.xyz, u.forward.xyz)), 0.0, 1.0); }
+// A point of the surface as the picture has it, from a ray along rd: coloured by its
+// face, lit from over the eye's shoulder, and at its depth, for what is drawn over the model.
+fn surfaced(h: vec3f, normal: vec3f, rd: vec3f, face: i32, feat: i32) -> Seen {
+  var seen: Seen;
+  seen.depth = deep(h);
+  var n = normal;
+  let within = dot(n, rd) > 0.0;  // seen from inside the solid
+  if (within) { n = -n; }
+  let hue = fract(f32(face) * 0.61803398875);
+  var base = 0.62 + 0.26 * cos(6.2831853 * (hue + vec3f(0.0, 0.33, 0.67)));
+  // a feature and all made inside it: their ids run from chosen.x to chosen.y
+  if ((u.chosen.x > 0 && (feat < u.chosen.x || feat > u.chosen.y)) || (u.chosen.z >= 0 && face != u.chosen.z)) { base = vec3f(0.58); }
+  if (within) { base *= 0.72; }
+  let light = 0.38 + 0.62 * max(dot(n, normalize(-rd + 0.45 * u.up.xyz - 0.3 * u.right.xyz)), 0.0);
+  seen.colour = vec4f(base * light, 1.0);
+  return seen;
+}
+`
+
+// The model: a ray a pixel, marched through the kernel's model().
+const marching = `
 @fragment fn marched(@builtin(position) at: vec4f) -> Seen {
   let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
   let ro = u.eye.xyz;
@@ -205,20 +242,89 @@ struct Seen { @location(0) colour: vec4f, @builtin(frag_depth) depth: f32 }
     } else { n += taps[k] * d; k++; if (k == 4) { break; } }
   }
   if (!hit) { return seen; }
-  // the hit's depth as the projection writes it, for what is drawn over the model
-  let along = dot(h - ro, u.forward.xyz);
-  seen.depth = clamp(u.depth.z / (u.depth.z - u.depth.y) * (1.0 - u.depth.y / along), 0.0, 1.0);
-  n = normalize(n);
-  let within = dot(n, rd) > 0.0;  // seen from inside the solid
-  if (within) { n = -n; }
-  let hue = fract(f32(face) * 0.61803398875);
-  var base = 0.62 + 0.26 * cos(6.2831853 * (hue + vec3f(0.0, 0.33, 0.67)));
-  // a feature and all made inside it: their ids run from chosen.x to chosen.y
-  if ((u.chosen.x > 0 && (feat < u.chosen.x || feat > u.chosen.y)) || (u.chosen.z >= 0 && face != u.chosen.z)) { base = vec3f(0.58); }
-  if (within) { base *= 0.72; }
-  let light = 0.38 + 0.62 * max(dot(n, normalize(-rd + 0.45 * u.up.xyz - 0.3 * u.right.xyz)), 0.0);
-  seen.colour = vec4f(base * light, 1.0);
-  return seen;
+  return surfaced(h, normalize(n), rd, face, feat);
+}
+// The picture from hits found another way (by the model's regions, below): a pixel's
+// normal and how far along its ray the surface is, or nothing. The model is evaluated
+// once, there, for the face.
+@group(1) @binding(0) var found: texture_2d<f32>;
+@fragment fn faced(@builtin(position) at: vec4f) -> Seen {
+  let hit = textureLoad(found, vec2u(at.xy), 0);
+  var seen: Seen; seen.colour = vec4f(u.back.xyz, 1.0); seen.depth = 1.0;
+  if (hit.w == 0.0) { return seen; }
+  let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
+  let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
+  let h = u.eye.xyz + rd * hit.w;
+  var face = -1; var feat = 0;
+  _ = model(h, &face, &feat, table, u.grid.xyz, u.grid.w, u.cells.xyz);
+  return surfaced(h, hit.xyz, rd, face, feat);
+}
+`
+
+// The model as regions (lib/region.ml). Each has a box, and a model() of its own: the
+// field as an evaluation needs it inside that box and no more. A region is drawn as its
+// box, and a pixel of the box is a ray marched from where it comes into the box to where
+// it leaves, through that short model(). Where regions lie behind one another along a
+// ray, the nearest hit is the one kept, by depth. Space that holds no surface has no
+// region, and costs nothing.
+//
+// The regions find where the surface is and which way it faces, not which face it is:
+// choosing a face at every evaluation of a march took most of a picture's time on one
+// model (README). What they find is a picture of numbers, and the model's one compiled
+// shader makes the picture from it (faced).
+const boxing = `
+override share: f32 = 1.0;  // how much of the whole model this region's model() is
+struct Box { @builtin(position) position: vec4f, @location(0) @interpolate(flat) lo: vec3f, @location(1) @interpolate(flat) hi: vec3f }
+// A box's twelve triangles, a corner by its three bits. Its far sides are the ones
+// drawn, so that it is there with the eye inside it too.
+@vertex fn box(@builtin(vertex_index) id: u32, @location(0) lo: vec3f, @location(1) hi: vec3f) -> Box {
+  var corners = array<u32, 36>(0, 4, 6, 0, 6, 2, 1, 3, 7, 1, 7, 5, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6);
+  let c = corners[id];
+  return Box(u.project * vec4f(mix(lo, hi, vec3f(f32(c & 1u), f32((c >> 1u) & 1u), f32(c >> 2u))), 1.0), lo, hi);
+}
+struct Crossed { hit: bool, at: vec3f, along: f32, normal: vec3f, evaluations: f32 }
+fn cross_box(in: Box) -> Crossed {
+  var o: Crossed;
+  let uv = vec2f(2.0 * in.position.x - u.size.x, u.size.y - 2.0 * in.position.y) / u.size.y;
+  let ro = u.eye.xyz;
+  let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
+  let t0 = (in.lo - ro) / rd; let t1 = (in.hi - ro) / rd;
+  let nearer = min(t0, t1); let further = max(t0, t1);
+  let tn = max(max(nearer.x, nearer.y), max(nearer.z, 0.0));
+  let tf = min(min(further.x, further.y), further.z);
+  if (tn >= tf) { return o; }
+  // where the ray comes into the model's box at all: the solid is left open there
+  let w0 = (u.lo.xyz - ro) / rd; let w1 = (u.hi.xyz - ro) / rd; let first = min(w0, w1);
+  let outside = tn <= max(max(first.x, first.y), max(first.z, 0.0)) + u.depth.x;
+  // as the whole model is marched (marched), between the box's two sides
+  var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
+  var t = tn; var n = vec3f(0); var k = 0;
+  for (var i = 0; i < 200; i++) {
+    var q = ro + rd * t;
+    if (o.hit) { q = o.at + u.depth.x * taps[k]; }
+    let d = model(q);
+    o.evaluations += 1.0;
+    if (!o.hit) {
+      if (abs(d) < u.depth.x) { o.hit = true; o.at = q; o.along = t; }
+      // inside the solid on coming into the region: the ray met the surface in a region before this one
+      else if (i == 0 && d < 0.0 && !outside) { break; }
+      else { t += abs(d) * u.size.w; if (t > tf) { break; } }
+    } else { n += taps[k] * d; k++; if (k == 4) { break; } }
+  }
+  o.normal = normalize(n);
+  return o;
+}
+struct Found { @location(0) hit: vec4f, @builtin(frag_depth) depth: f32 }
+@fragment fn boxed(in: Box) -> Found {
+  let o = cross_box(in);
+  if (!o.hit) { discard; }
+  return Found(vec4f(o.normal, o.along), deep(o.at));
+}
+// What crossing the box cost, to add up over the regions a pixel's ray crosses: how many
+// evaluations, and those in whole evaluations of the model.
+@fragment fn weighed(in: Box) -> @location(0) vec4f {
+  let o = cross_box(in);
+  return vec4f(o.evaluations, o.evaluations * share, 0.0, 0.0);
 }
 `
 
@@ -254,7 +360,25 @@ fn placed(p: vec3f) -> vec4f { return u.project * vec4f(p + normalize(u.eye.xyz 
 
 // ---- Drawing ----
 
-let device, context, format, bound, layout, uniforms, depth, model = null, timer = null
+let device, context, format, bound, layout, uniforms, coarse, depth, model = null, timer = null
+// how the model is drawn: by one shader compiled for the whole of it, or cut into regions
+// with a shader each (so from the start with ?regions on the page's address, and into at
+// most N of them with ?regions=N). More regions draw faster and take longer to make ready.
+const asked = new URLSearchParams(location.search)
+let regional = asked.has('regions')
+const most = Math.max(1, Math.min(4096, +asked.get('regions') || 512))
+// the regions the model in front is drawn by, once it has them and its compiled shader can give their hits a face
+const cut = () => regional && model?.compiled?.faced ? model.regions ?? null : null
+// what the regions find, a pixel: a picture of numbers, and what the compiled shader reads it through
+let hits, found = null
+// for a map of the regions' work: what the sums over a pixel's regions are read through,
+// the pipeline that shows them, and the one that marks the pixels whose rays cross the model's box
+let summing, summed, sums = null
+// what a shader that reads no table of gates is given: the uniforms, and a table of nothing
+let nothing
+const plainly = buffer => plainly[buffer == uniforms] ??= device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer } }, { binding: 1, resource: nothing }] })
+// what is added to what is there, as numbers
+const added = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } }
 // what is drawn over the model, a line or a dot an instance: [pipeline hidden, pipeline in front], its buffer, how many
 const lines = { floats: 11, buffer: null, count: 0 }, dots = { floats: 8, buffer: null, count: 0 }
 
@@ -270,7 +394,17 @@ async function graphics() {
   bound = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } }] })
   layout = device.createPipelineLayout({ bindGroupLayouts: [bound] })
   uniforms = device.createBuffer({ size: 272, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
-  const module = device.createShaderModule({ code: shared + over })
+  coarse = device.createBuffer({ size: 272, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+  summing = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} }] })
+  const sums = device.createShaderModule({ code: shared + framing + ramping + adding })
+  summed = {
+    shown: device.createRenderPipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [summing] }), vertex: { module: sums, entryPoint: 'whole' }, fragment: { module: sums, entryPoint: 'summed', targets: [{ format }] },
+                                         depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' } }),
+    through: device.createRenderPipeline({ layout, vertex: { module: sums, entryPoint: 'whole' }, fragment: { module: sums, entryPoint: 'through', targets: [{ format: 'rgba16float', blend: added }] } }),
+  }
+  hits = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }] })
+  nothing = device.createTexture({ size: [1, 1], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING }).createView()
+  const module = device.createShaderModule({ code: shared + tabled + over })
   const blend = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } }
   const pipelines = (name, attributes) => [['greater', 0.22], ['less-equal', 1]].map(([depthCompare, faint]) => {
     let offset = 0
@@ -302,20 +436,336 @@ function sized() {
   draw()
 }
 
-// A model's shader compiled (a large one takes a second or more: the one before is drawn
-// until then) and its gates' table made a texture.
-async function compiled(s, table) {
-  const module = device.createShaderModule({ code: shared + s.shader + marching })
+// A model as the page holds it: what each way of drawing needs of it, made when that
+// way is first asked for.
+const held = (s, name, alone) => ({ name, alone, source: s.shader, gates: s.gates, compiled: null, regions: null })
+
+// For drawing by regions: the kernel's cut of the model (lib/region.ml), each shader of
+// it compiled, and the boxes on the graphics card, six numbers each, sorted by shader so
+// that a shader's are drawn in one go. Asked for once a model.
+const regioned = m => m.cutting ??= (async () => {
+  const answer = await fetch('/regions' + about(m.name, `&solo=${m.alone}&most=${most}`))
+  if (!answer.ok) throw new Error(answer.status == 404 ? 'The page is served by an older mk52 than it is: mk52 stop, then mk52 open, in the design folder.' : await answer.text())
+  const made = await answer.json(), count = made.regions.length / 7, shader = r => made.regions[7 * r + 6]
+  if (m.gone) return  // the model was let go of meanwhile: its shaders are not compiled for nothing
+  const boxes = new Float32Array(6 * count), runs = []
+  Array.from({ length: count }, (_, r) => r).sort((a, b) => shader(a) - shader(b)).forEach((r, i) => {
+    boxes.set(made.regions.slice(7 * r, 7 * r + 6), 6 * i)
+    if (runs[runs.length - 1]?.shader == shader(r)) runs[runs.length - 1].count++
+    else runs.push({ shader: shader(r), first: i, count: 1 })
+  })
+  const modules = made.shaders.map(s => device.createShaderModule({ code: shared + s.text + framing + boxing }))
+  // they are all written the same way: what is wrong with one is wrong with the first
+  const wrong = modules.length && (await modules[0].getCompilationInfo()).messages.find(m => m.type == 'error')
+  if (wrong) throw new Error(`A region's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
+  const r = { count, operations: made.operations, shaders: made.shaders, modules, runs, weighed: null }
+  r.drawn = await piped(r, 'boxed', [{ format: 'rgba32float' }], { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' })
+  if (m.gone) return
+  r.buffer = device.createBuffer({ size: Math.max(24, boxes.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
+  device.queue.writeBuffer(r.buffer, 0, boxes)
+  m.regions = r
+})()
+
+// A pipeline for each of a cut's shaders, for one of the two things a pixel of a box
+// comes to: where the surface is (boxed), or what finding it cost (weighed).
+const piped = (r, entryPoint, targets, depthStencil) => Promise.all(r.modules.map((module, i) => device.createRenderPipelineAsync({
+  layout, primitive: { cullMode: 'front' }, depthStencil,
+  vertex: { module, entryPoint: 'box', buffers: [{ stepMode: 'instance', arrayStride: 24, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }] }] },
+  fragment: { module, entryPoint, targets, ...(entryPoint == 'weighed' ? { constants: { share: r.shaders[i].operations / r.operations } } : {}) },
+})))
+
+// Every region's box, each through its shader's pipeline.
+function boxes(pass, r, pipelines) {
+  pass.setVertexBuffer(0, r.buffer)
+  for (const run of r.runs) { pass.setPipeline(pipelines[run.shader]); pass.draw(36, run.count, 0, run.first) }
+}
+
+// For drawing by regions, the compiled shader made a second time over: to give a face
+// to the hits the regions find.
+const facing = m => m.facing ??= device.createRenderPipelineAsync({
+  layout: device.createPipelineLayout({ bindGroupLayouts: [bound, hits] }), vertex: { module: m.compiled.module, entryPoint: 'whole' }, fragment: { module: m.compiled.module, entryPoint: 'faced', targets: [{ format }] },
+  depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
+}).then(pipeline => { m.compiled.faced = pipeline })
+
+// A model made ready to draw, as the page is set to draw. The one compiled shader comes
+// first either way: it is ready sooner. The regions follow, and take over the drawing
+// when they are there.
+async function readied(m) {
+  await compiled(m)
+  if (!regional) { if (map) await counter(m.compiled); return }
+  Promise.all([regioned(m), facing(m)]).then(async () => {
+    if (map && m.regions) m.regions.weighed ??= await piped(m.regions, 'weighed', [{ format: 'rgba16float', blend: added }])
+    if (m == model) { status(); changed() }
+  }).catch(e => { if (m == model) { said = e.message; status() } })
+}
+
+// For the compiled shader: the kernel's own text for the model compiled (a large one
+// takes a second or more), and its gates' table a texture.
+async function compiled(m) {
+  if (m.compiled) return
+  const table = await (await fetch('/gates' + about(m.name, '&solo=' + m.alone))).arrayBuffer()
+  const module = device.createShaderModule({ code: shared + tabled + m.source + framing + marching })
   const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
   if (wrong) throw new Error(`The model's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
   const pipeline = await device.createRenderPipelineAsync({
     layout, vertex: { module, entryPoint: 'whole' }, fragment: { module, entryPoint: 'marched', targets: [{ format }] },
     depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
   })
-  const across = s.gates.width, rows = Math.max(1, Math.floor(table.byteLength / (16 * across)))
+  const across = m.gates.width, rows = Math.max(1, Math.floor(table.byteLength / (16 * across)))
   const texture = device.createTexture({ size: [across, rows], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
   device.queue.writeTexture({ texture }, table, { bytesPerRow: 16 * across }, [across, rows])
-  return { pipeline, texture, bind: device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer: uniforms } }, { binding: 1, resource: texture.createView() }] }) }
+  m.compiled = { module, pipeline, texture, across, rows, source: m.source, binds: {} }
+}
+
+// What a compiled shader is given: uniforms, and the table of its gates. With [gated]
+// off the table is one that says every gate is entered everywhere.
+function given(c, buffer) {
+  if (!gated && !c.open) {
+    c.open = device.createTexture({ size: [c.across, c.rows], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
+    device.queue.writeTexture({ texture: c.open }, new Uint32Array(4 * c.across * c.rows).fill(0xffffffff), { bytesPerRow: 16 * c.across }, [c.across, c.rows])
+  }
+  return c.binds[(buffer == uniforms) + ' ' + gated] ??= device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer } }, { binding: 1, resource: (gated ? c.texture : c.open).createView() }] })
+}
+
+function dropped(m) { if (m) m.gone = true; m?.regions?.buffer.destroy(); m?.compiled?.texture.destroy(); m?.compiled?.open?.destroy() }
+
+// The uniforms for a picture w by h of the model in front.
+function uniformed(w, h, back) {
+  const p = placed(), f = new Float32Array(68), n = new Int32Array(f.buffer), grid = scene.gates
+  f.set(p.eye, 0); f.set(p.forward, 4); f.set(p.right, 8); f.set(p.up, 12)
+  f.set(scene.lo, 16); f.set(scene.hi, 20); f.set(back, 24); f.set([...grid.lo, grid.cell], 28)
+  f.set([w, h, tanHalf, scene.step], 32); f.set([p.diagonal * 2e-4, p.near, p.far], 36)
+  n.set(grid.cells, 40); n.set([feature, last(feature), face], 44)
+  f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, devicePixelRatio, maps.indexOf(map) + 1, cut()?.operations ?? model.compiled?.counted?.total ?? 1], 64)
+  return f
+}
+
+// ---- Where the work goes ----
+// For looking into how fast a model draws. Regions switches between the two ways of
+// drawing, and with the one compiled shader Gates switches its skipping off: the time a
+// picture takes each way is read under the lists. And in place of the picture, a map of
+// what each pixel cost. The compiled shader is compiled once more with its work counted;
+// a region's shader says what crossing its box cost, and a pixel's regions are added up
+// (the one evaluation of the compiled shader that then gives the hit its face is not counted).
+// A pixel is coloured by
+//
+//   cost    what its ray ran, in whole evaluations of the model: every operation of the
+//           model run once is 1. It is the next two multiplied.
+//   steps   how many times its ray evaluated the model: its march, and four for the normal
+//   share   how much of the model an evaluation ran, on average along the ray: what its
+//           gates did not skip
+//
+// The first is on a fixed scale of tens, blue under one whole evaluation and red over
+// it, so that two models can be told apart by eye.
+
+const maps = ['cost', 'steps', 'share']
+let gated = true, map = null
+let tally = null, tallying = 0
+let plain = {}  // how long the picture itself took: by regions ('regions'), or compiled with the gates on (true) and off (false)
+
+// From few to many; and either side of one whole evaluation.
+const ramps = { amount: ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'], below: ['#1f4e8c', '#4f7fb8', '#8fb0d6', '#c7d8ea', '#eef0ee'], above: ['#eef0ee', '#f3cf9f', '#e99a55', '#cf5a2e', '#8f1d1d'] }
+
+// The model's function with its work counted, in two ways, into *cost:
+//
+//   y  what the model's own logic ran: at the end of every block, the number of
+//      operations written straight in that block is added. What a gate or a select
+//      passed over adds nothing.
+//   x  what the graphics card ran, if it runs both sides of every select and skips only
+//      at a gate: at the end of a gate, and of the function, everything written in it
+//      down to the next gates is added. A compiler turns a small branch into both sides
+//      and a choice, and the times bear this count out, not the other (README).
+//
+// This reads the kernel's text as lib/shader.ml writes it: a statement a line, an
+// operation as `let rN = ...;` alone on its line, a block opened by a line that ends in
+// `{` (a gate's begins `if ((g`) and closed by one that is `}`. Also: how many
+// operations there are in all.
+function counted(text) {
+  const out = [], blocks = []  // each open block: whether it is a gate, its own operations, and all those under it short of a gate
+  let total = 0
+  for (const line of text.split('\n')) {
+    const t = line.trim(), pad = line.slice(0, line.length - line.trimStart().length), top = blocks[blocks.length - 1]
+    if (t == '}' || t.startsWith('return ')) {
+      if (top.own || (top.gate && top.all)) out.push(`${pad}*cost += vec2u(${top.gate ? top.all : 0}u, ${top.own}u);`)
+      if (t == '}') { blocks.pop(); if (!top.gate) blocks[blocks.length - 1].all += top.all }
+    }
+    if (/^let r\d+ = [^;]*;$/.test(t)) { top.own++; top.all++; total++ }
+    out.push(t.startsWith('fn model(') ? line.replace('feat: ptr<function, i32>,', 'feat: ptr<function, i32>, cost: ptr<function, vec2u>,') : line)
+    if (t.endsWith('{')) blocks.push({ gate: t.startsWith('if ((g') || t.startsWith('fn model('), own: 0, all: 0 })
+  }
+  return { text: out.join('\n'), total }
+}
+
+// A map's colours: u.line.z says which map, u.line.w how many operations the whole model is.
+const ramping = `
+${Object.entries(ramps).map(([name, colours]) => `const ${name} = array<vec3f, 5>(${colours.map(c => `vec3f(${[1, 3, 5].map(i => (parseInt(c.slice(i, i + 2), 16) / 255).toFixed(4)).join(', ')})`).join(', ')});`).join('\n')}
+fn ramp(t: f32, stops: array<vec3f, 5>) -> vec3f {
+  var colours = stops;
+  let x = clamp(t, 0.0, 1.0) * 4.0; let i = min(u32(x), 3u);
+  return mix(colours[i], colours[i + 1u], x - f32(i));
+}
+// For a pixel whose ray evaluated the model so many times and ran so many operations.
+fn mapped(evaluations: f32, work: f32) -> vec3f {
+  let spent = work / u.line.w;  // in whole evaluations of the model
+  if (u.line.z == 2.0) { return ramp(evaluations / 80.0, amount); }
+  if (u.line.z == 3.0) { return ramp(spent / max(evaluations, 1.0), amount); }
+  let tens = log(max(spent, 1e-6)) / log(10.0);  // -1 is a tenth of an evaluation, 2 a hundred
+  if (tens < 0.0) { return ramp(tens + 1.0, below); }
+  return ramp(tens / 2.0, above);
+}
+`
+
+const walking = `
+struct Walked { evaluations: f32, work: vec2f, entered: bool, depth: f32, light: f32 }
+// The march of the picture's shader (marched), and what it cost: how many times the
+// model was evaluated for the pixel, and the operations those evaluations ran, as the
+// graphics card runs them (x) and as the model's logic needs them (y).
+fn walk(at: vec4f) -> Walked {
+  var w = Walked(0.0, vec2f(0), false, 1.0, 1.0);
+  let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
+  let ro = u.eye.xyz;
+  let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
+  let t0 = (u.lo.xyz - ro) / rd; let t1 = (u.hi.xyz - ro) / rd;
+  let nearer = min(t0, t1); let further = max(t0, t1);
+  let tn = max(max(nearer.x, nearer.y), max(nearer.z, 0.0));
+  let tf = min(min(further.x, further.y), further.z);
+  if (tn >= tf) { return w; }
+  w.entered = true;
+  var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
+  var t = tn; var hit = false; var h = vec3f(0); var n = vec3f(0); var k = 0;
+  for (var i = 0; i < 400; i++) {
+    var q = ro + rd * t;
+    if (hit) { q = h + u.depth.x * taps[k]; }
+    var f = 0; var ft = 0; var cost = vec2u(0);
+    let d = model(q, &f, &ft, &cost, table, u.grid.xyz, u.grid.w, u.cells.xyz);
+    w.evaluations += 1.0; w.work += vec2f(cost);
+    if (!hit) {
+      if (abs(d) < u.depth.x) { hit = true; h = q; }
+      else { t += abs(d) * u.size.w; if (t > tf) { break; } }
+    } else { n += taps[k] * d; k++; if (k == 4) { break; } }
+  }
+  if (!hit) { return w; }
+  w.depth = deep(h);
+  n = normalize(n);
+  if (dot(n, rd) > 0.0) { n = -n; }
+  w.light = 0.38 + 0.62 * max(dot(n, normalize(-rd + 0.45 * u.up.xyz - 0.3 * u.right.xyz)), 0.0);
+  return w;
+}
+@fragment fn heat(@builtin(position) at: vec4f) -> Seen {
+  let w = walk(at);
+  var seen: Seen; seen.depth = w.depth; seen.colour = vec4f(u.back.xyz, 1.0);
+  if (!w.entered) { return seen; }
+  seen.colour = vec4f(mapped(w.evaluations, w.work.x) * (0.82 + 0.18 * w.light), 1.0);
+  return seen;
+}
+// The same as numbers, to add up over the picture.
+@fragment fn tallied(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let w = walk(at);
+  return vec4f(w.evaluations, w.work, f32(w.entered));
+}
+`
+
+// A map of the regions' work. A pixel's ray crosses several regions, each drawn by its
+// own shader, so what they cost is first added up in a picture of numbers (weighed, in
+// each region's shader) and then shown.
+const adding = `
+@group(0) @binding(1) var sums: texture_2d<f32>;  // a pixel: its evaluations, those in whole evaluations of the model, and whether its ray crosses the model's box
+@fragment fn summed(@builtin(position) at: vec4f) -> Seen {
+  let s = textureLoad(sums, vec2u(at.xy), 0);
+  var seen: Seen; seen.depth = 1.0; seen.colour = vec4f(u.back.xyz, 1.0);
+  if (s.w > 0.0) { seen.colour = vec4f(mapped(s.x, s.y * u.line.w), 1.0); }
+  return seen;
+}
+@fragment fn through(@builtin(position) at: vec4f) -> @location(0) vec4f {
+  let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
+  let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
+  let t0 = (u.lo.xyz - u.eye.xyz) / rd; let t1 = (u.hi.xyz - u.eye.xyz) / rd;
+  let nearer = min(t0, t1); let further = max(t0, t1);
+  return vec4f(0.0, 0.0, 0.0, f32(max(max(nearer.x, nearer.y), max(nearer.z, 0.0)) < min(min(further.x, further.y), further.z)));
+}
+`
+
+// The regions' work for every pixel of a picture, left in [target] as numbers.
+function weigh(encoder, target, buffer) {
+  const pass = encoder.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] })
+  pass.setBindGroup(0, plainly(buffer))
+  pass.setPipeline(summed.through); pass.draw(3)
+  boxes(pass, model.regions, model.regions.weighed)
+  pass.end()
+}
+
+// A number as the graphics card keeps it in 16 bits.
+const halved = h => (h >> 15 ? -1 : 1) * ((h >> 10 & 31) == 0 ? (h & 1023) * 2 ** -24 : (h >> 10 & 31) == 31 ? Infinity : (1 + (h & 1023) / 1024) * 2 ** ((h >> 10 & 31) - 15))
+
+// The counting shaders of a model's compiled shader, made the first time a map of it is asked for.
+async function counter(c) {
+  if (c.counted) return
+  const { text, total } = counted(c.source)
+  const module = device.createShaderModule({ code: shared + tabled + text + framing + ramping + walking })
+  const wrong = (await module.getCompilationInfo()).messages.find(m => m.type == 'error')
+  if (wrong) throw new Error(`The counting shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
+  const vertex = { module, entryPoint: 'whole' }
+  const [heat, tallied] = await Promise.all([
+    device.createRenderPipelineAsync({ layout, vertex, fragment: { module, entryPoint: 'heat', targets: [{ format }] }, depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' } }),
+    device.createRenderPipelineAsync({ layout, vertex, fragment: { module, entryPoint: 'tallied', targets: [{ format: 'rgba32float' }] } })])
+  c.counted = { heat, tallied, total }
+}
+
+// A map in place of the picture, or with the one that is shown, the picture again.
+async function mapped(which) {
+  map = map == which ? null : which
+  tally = null
+  for (const m of maps) $('map' + m[0].toUpperCase() + m.slice(1)).setAttribute('aria-pressed', m == map)
+  legend(); status()
+  const m = model
+  if (map && m) try { await readied(m) } catch (e) { said = e.message; status() }
+  changed()
+}
+
+// The picture's work added up: the same rays, a quarter as many each way, drawn as
+// numbers and read back. A moment after the last change, as it is a second picture.
+async function tallied() {
+  const m = model, c = m?.compiled, r = cut()
+  if (!map || !m || !scene || !(r ? r.weighed : c?.counted)) return
+  const total = r ? r.operations : c.counted.total
+  // regions add up, which the graphics card does in 16 bits a number; the compiled shader says its own in 32
+  const w = Math.ceil(canvas.width / 4), h = Math.ceil(canvas.height / 4), bytes = r ? 8 : 16, row = Math.ceil(w * bytes / 256) * 256
+  const numbers = device.createTexture({ size: [w, h], format: r ? 'rgba16float' : 'rgba32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC })
+  const read = device.createBuffer({ size: row * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
+  device.queue.writeBuffer(coarse, 0, uniformed(w, h, [0, 0, 0]))
+  const encoder = device.createCommandEncoder()
+  if (r) weigh(encoder, numbers, coarse)
+  else {
+    const pass = encoder.beginRenderPass({ colorAttachments: [{ view: numbers.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] })
+    pass.setBindGroup(0, given(c, coarse)); pass.setPipeline(c.counted.tallied); pass.draw(3); pass.end()
+  }
+  encoder.copyTextureToBuffer({ texture: numbers }, { buffer: read, bytesPerRow: row }, [w, h])
+  device.queue.submit([encoder.finish()])
+  await read.mapAsync(GPUMapMode.READ)
+  const v = r ? Float32Array.from(new Uint16Array(read.getMappedRange()), halved) : new Float32Array(read.getMappedRange())
+  // a pixel is four numbers: its evaluations, its work (a region's in whole evaluations, the compiled shader's in
+  // operations as the card runs them and then as its logic needs them), and whether its ray crosses the model's box
+  let evaluations = 0, work = 0, needed = 0, entered = 0
+  for (let y = 0; y < h; y++) for (let x = 0, i = y * row * 4 / bytes; x < w; x++, i += 4) { evaluations += v[i]; work += v[i + 1]; if (!r) needed += v[i + 2]; entered += v[i + 3] }
+  read.unmap(); read.destroy(); numbers.destroy()
+  if (m != model || !map || r != cut()) return
+  if (!r) { work /= total; needed /= total }
+  // a pixel here is one whose ray goes through the model's box: the others cost nothing
+  tally = { cost: work / entered, steps: evaluations / entered, share: work / evaluations, needed: r ? null : needed / evaluations,
+            operations: work * total * canvas.width * canvas.height / (w * h), which: r ? 'regions' : gated }
+  status()
+}
+
+// What the map's colours stand for.
+function legend() {
+  $('legend').hidden = !map
+  if (!map) return
+  const bar = colours => el('i', { style: `background: linear-gradient(90deg, ${colours.join(', ')})` })
+  const marks = (...at) => el('div', {}, at.map(a => el('span', {}, a)))
+  $('legend').replaceChildren(...(
+    map == 'cost' ? [bar([...ramps.below.map((c, i) => `${c} ${i * 100 / 12}%`), ...ramps.above.map((c, i) => `${c} ${(4 + 2 * i) * 100 / 12}%`)]), marks('0.1', '1', '10', '100'), 'whole evaluations of the model, a pixel']
+    : map == 'steps' ? [bar(ramps.amount), marks('0', '20', '40', '60', '80'), 'evaluations of the model along a ray']
+    : [bar(ramps.amount), marks('0', '25', '50', '75', '100%'), 'of the model, run by an evaluation']))
 }
 
 // The last feature made inside a feature: its own id, or its deepest descendant's.
@@ -337,24 +787,45 @@ function draw() {
   if (!device || !depth) return
   const w = canvas.width, h = canvas.height
   const back = getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g).slice(0, 3).map(v => v / 255)
-  const timing = timer && !timer.reading && scene && model
+  const c = model?.compiled, r = cut(), ready = scene && c
+  const timing = timer && !timer.reading && ready
+  // a map is the compiled shader's other self, or the regions' work added up first and then shown
+  const counting = !!(map && (r ? r.weighed : c?.counted)), which = r ? 'regions' : gated
   const encoder = device.createCommandEncoder()
+  if (ready) device.queue.writeBuffer(uniforms, 0, uniformed(w, h, back))
+  if (ready && r && counting) {
+    if (sums?.width != w || sums.height != h) {
+      sums?.destroy()
+      sums = device.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING })
+      sums.shown = device.createBindGroup({ layout: summing, entries: [{ binding: 0, resource: { buffer: uniforms } }, { binding: 1, resource: sums.createView() }] })
+    }
+    weigh(encoder, sums, uniforms)
+  }
+  // by regions the picture is two passes: the regions find each pixel's hit, then the compiled shader gives it its face
+  const finding = ready && r && !counting
+  if (finding) {
+    if (found?.width != w || found.height != h) {
+      found?.destroy()
+      found = device.createTexture({ size: [w, h], format: 'rgba32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING })
+      found.read = device.createBindGroup({ layout: hits, entries: [{ binding: 0, resource: found.createView() }] })
+    }
+    const first = encoder.beginRenderPass({
+      colorAttachments: [{ view: found.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }],
+      depthStencilAttachment: { view: depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
+      ...(timing ? { timestampWrites: { querySet: timer.queries, beginningOfPassWriteIndex: 0 } } : {}),
+    })
+    first.setBindGroup(0, plainly(uniforms)); boxes(first, r, r.drawn); first.end()
+  }
   const pass = encoder.beginRenderPass({
     colorAttachments: [{ view: context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [...back, 1] }],
     depthStencilAttachment: { view: depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
-    ...(timing ? { timestampWrites: { querySet: timer.queries, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {}),
+    ...(timing ? { timestampWrites: { querySet: timer.queries, ...(finding ? {} : { beginningOfPassWriteIndex: 0 }), endOfPassWriteIndex: 1 } } : {}),
   })
-  if (scene && model) {
-    const p = placed(), f = new Float32Array(68), n = new Int32Array(f.buffer)
-    f.set(p.eye, 0); f.set(p.forward, 4); f.set(p.right, 8); f.set(p.up, 12)
-    f.set(scene.lo, 16); f.set(scene.hi, 20); f.set(back, 24); f.set([...scene.gates.lo, scene.gates.cell], 28)
-    f.set([w, h, tanHalf, scene.step], 32); f.set([p.diagonal * 2e-4, p.near, p.far], 36)
-    n.set(scene.gates.cells, 40); n.set([feature, last(feature), face], 44)
-    f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, devicePixelRatio], 64)
-    device.queue.writeBuffer(uniforms, 0, f)
-    pass.setBindGroup(0, model.bind)
-    pass.setPipeline(model.pipeline)
-    pass.draw(3)
+  if (ready) {
+    if (r && counting) { pass.setBindGroup(0, sums.shown); pass.setPipeline(summed.shown); pass.draw(3) }
+    else if (r) { pass.setBindGroup(0, given(c, uniforms)); pass.setBindGroup(1, found.read); pass.setPipeline(c.faced); pass.draw(3) }
+    else { pass.setBindGroup(0, given(c, uniforms)); pass.setPipeline(counting ? c.counted.heat : c.pipeline); pass.draw(3) }
+    pass.setBindGroup(0, plainly(uniforms))
     for (const hidden of [0, 1]) for (const kind of [lines, dots]) if (kind.count) {
       pass.setPipeline(kind.pipelines[hidden])
       pass.setVertexBuffer(0, kind.buffer)
@@ -372,6 +843,7 @@ function draw() {
     timer.read.mapAsync(GPUMapMode.READ).then(() => {
       const t = new BigUint64Array(timer.read.getMappedRange())
       took = Number(t[1] - t[0]) / 1e6
+      if (!counting) plain[which] = took
       timer.read.unmap()
       timer.reading = false
       status()
@@ -459,7 +931,7 @@ function front(name) {
   if (name == current) return
   current = name; written = null; edges = null
   feature = 0; face = -1; solo = 0; picked = null
-  if (!name) { scene = null; model = null; lay() }
+  if (!name) { scene = null; dropped(model); model = null; lay() }
   follow()
   panel()
 }
@@ -471,12 +943,14 @@ async function take(name, alone) {
     const r = await fetch('/scene' + about(name, '&solo=' + alone))
     if (!r.ok) throw new Error((await r.text()) || name + ' could not be read.')
     const s = await r.json()
-    const [table, found] = await Promise.all([fetch('/gates' + about(name, '&solo=' + alone)).then(r => r.arrayBuffer()), fetch('/edges' + about(name)).then(r => r.json())])
-    const ready = await compiled(s, table)
+    const found = await (await fetch('/edges' + about(name))).json()
+    const ready = held(s, name, alone)
+    await readied(ready)
     // a later one was asked for meanwhile, or the person moved on
-    if (mine != taking || current != name || solo != alone) { ready.texture.destroy(); return }
-    model?.texture.destroy()
+    if (mine != taking || current != name || solo != alone) { dropped(ready); return }
+    dropped(model)
     model = ready; scene = s; edges = found
+    plain = {}; tally = null
     // what was picked out may be gone from the model as it is now
     if (!s.features.some(f => f.id == feature)) feature = 0
     face = -1
@@ -515,6 +989,8 @@ async function pick(x, y) {
 let noting = 0
 function changed() {
   redraw()
+  clearTimeout(tallying)
+  if (map) tallying = setTimeout(tallied, 250)
   clearTimeout(noting)
   noting = setTimeout(() => {
     if (!current || !scene) return
@@ -581,12 +1057,19 @@ function panel() {
   status()
 }
 
+const ms = t => `${t < 10 ? t.toFixed(1) : Math.round(t)} ms`
+
 function status() {
   $('extract').disabled = !current || asking > 0
   $('status').replaceChildren(...[
     (building || asking > 0) && el('div', {}, 'Building…'),
     said && el('pre', { id: 'said' }, said),
-    !said && scene && el('div', {}, `${scene.nodes} nodes, ${scene.selects} selects` + (took == null ? '' : ` · ${took < 10 ? took.toFixed(1) : Math.round(took)} ms a picture`)),
+    !said && scene && el('div', {}, `${scene.nodes} nodes, ${scene.selects} selects` + (took == null ? '' : ` · ${ms(took)} a ${map ? 'map' : 'picture'}${cut() ? `, ${cut().count} regions` : (gated ? ', compiled' : ', compiled, gates off') + (regional ? ', while its regions are made ready' : '')}`)),
+    // what the picture cost, as the map's shader counted it, and how fast that went by the picture's own time
+    !said && scene && map && (tally
+      ? el('div', {}, `${tally.cost < 0.1 ? tally.cost.toFixed(3) : tally.cost.toFixed(1)} whole evaluations a pixel: ${tally.steps.toFixed(1)} steps × ${(100 * tally.share).toFixed(tally.share < 0.1 ? 1 : 0)}% of the model.` + (tally.needed == null ? '' : ` Its logic needs ${(100 * tally.needed).toFixed(0)}%.`),
+          el('br'), `${Math.round(tally.operations / 1e6).toLocaleString('en')} M operations a picture` + (plain[tally.which] ? `: ${Math.round(tally.operations / 1e6 / plain[tally.which])} M a ms, by its ${ms(plain[tally.which])}.` : '.'))
+      : el('div', {}, (cut() ? cut().weighed : model?.compiled?.counted) ? 'Adding up the picture…' : 'The counting shaders are being made ready…')),
   ].filter(Boolean))
 }
 
@@ -597,6 +1080,17 @@ for (const what of ['edges', 'sketches', 'frames']) {
 }
 $('extract').onclick = () => current && command('extract', current)
 $('fit').onclick = fit
+$('gated').onclick = () => { gated = !gated; $('gated').setAttribute('aria-pressed', gated); tally = null; status(); changed() }
+$('regional').setAttribute('aria-pressed', regional); $('gated').disabled = regional
+$('regional').onclick = async () => {
+  regional = !regional
+  $('regional').setAttribute('aria-pressed', regional); $('gated').disabled = regional
+  tally = null; status()
+  const m = model
+  if (m) try { await readied(m) } catch (e) { said = e.message; status() }
+  changed()
+}
+for (const m of maps) $('map' + m[0].toUpperCase() + m.slice(1)).onclick = () => mapped(m)
 
 // ---- The hand on the picture ----
 // Dragging turns the view about its turning point, shift-drag or right-drag slides it,

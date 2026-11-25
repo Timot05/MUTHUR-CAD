@@ -242,12 +242,24 @@ let profile ?u ?v ?(holes = []) ?moving ?lip outer =
 
 (* The profile between two heights along the third coordinate. The two ends are the
    faces "top" and "bottom": a span of the same name would be the same face, and the
-   edge between them would be lost, so it is refused. *)
-let extrude ?u ?v ?w ?(holes = []) ~lo ~hi outer =
+   edge between them would be lost, so it is refused.
+
+   [chamfer_lo] and [chamfer_hi] cut the edge round an end at 45 degrees, that far in
+   and that far down, round the holes too. A chamfer is the profile's own distance and
+   the height added: the solid is exactly the chamfered one, the slope stays 1, and the
+   profile is worked out once for the walls and both chamfers. Its faces are named
+   "top chamfer" and "bottom chamfer" with the span they run along. *)
+let extrude ?u ?v ?w ?(holes = []) ?(chamfer_lo = 0.) ?(chamfer_hi = 0.) ~lo ~hi outer =
   if u = None && v = None && w = None then keep ~turned:false (outer :: holes);
   let w = Option.value ~default:E.z w in
   List.iter (Array.iter (fun s -> if s.name = "top" || s.name = "bottom" then fail "a span named %s would be the same face as the solid's %s" s.name s.name)) (outer :: holes);
-  G.intersection (G.intersection (profile ?u ?v ~holes outer) (G.piece "top" (E.sub w (E.const hi)))) (G.piece "bottom" (E.sub (E.const lo) w))
+  if chamfer_lo < 0. || chamfer_hi < 0. || chamfer_lo +. chamfer_hi > hi -. lo then fail "the chamfers do not fit between %g and %g" lo hi;
+  let p = profile ?u ?v ~holes outer in
+  (* the plane through the edge that is [size] short of an end, leaning in towards that end *)
+  let slant name size towards = G.apply ~naming:(G.Made name) ~lip:1. (E.mul (E.const (1. /. sqrt 2.)) (E.add G.x0 (E.add towards (E.const size)))) [ p ] in
+  let pulled = G.intersection (G.intersection p (G.piece "top" (E.sub w (E.const hi)))) (G.piece "bottom" (E.sub (E.const lo) w)) in
+  let pulled = if chamfer_hi > 0. then G.intersection pulled (slant "top chamfer" chamfer_hi (E.sub w (E.const hi))) else pulled in
+  if chamfer_lo > 0. then G.intersection pulled (slant "bottom chamfer" chamfer_lo (E.sub (E.const lo) w)) else pulled
 
 (* The profile turned about the z axis: drawn in (distance from the axis, z). The field
    is still the distance: the nearest point of a turned solid lies in the same half-plane
