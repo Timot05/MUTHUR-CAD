@@ -51,6 +51,7 @@ let tools =
           ("distance", prop "number" "From the target, in domain diagonals. Default shows everything; 0.3 is close.");
           ("target", Json.Obj [ ("type", Json.Str "array"); ("items", Json.Obj [ ("type", Json.Str "number") ]); ("description", Json.Str "The point looked at, [x, y, z]. Default: the middle of the model's box.") ]);
           ("edges", prop "boolean" "Draw the extracted edges too.");
+          ("paint", prop "boolean" "Each part in the colour its code gives it, not each face in a colour of its own.");
           ("width", prop "integer" "Default 800."); ("height", prop "integer" "Default 600.") ]
         [],
       fun args ->
@@ -58,7 +59,7 @@ let tools =
         let w = max 64 (min 2000 (int_of_float (num "width" 800.))) and h = max 64 (min 2000 (int_of_float (num "height" 600.))) in
         let target = match Json.list (Json.member "target" args) with [ x; y; z ] -> Some [| Json.number x; Json.number y; Json.number z |] | _ -> None in
         let camera = { Render.yaw = num "yaw" 40.; pitch = num "pitch" 26.; dist = num "distance" (Render.fit ~w ~h); target } in
-        [ Image (Png.base64 (Project.picture ~w ~h ~camera ~edges:(Json.bool (Json.member "edges" args)) (Project.model (model_of args))), "image/png") ] );
+        [ Image (Png.base64 (Project.picture ~w ~h ~camera ~edges:(Json.bool (Json.member "edges" args)) ~paint:(Json.bool (Json.member "paint" args)) (Project.model (model_of args))), "image/png") ] );
     ( "clash",
       "Whether a model's parts run into each other, touch, or come nearer than a gap: every pair of its parts (its features that are in no other), and its bought parts, which are held by the corners and middles of their triangles, against the designed ones. Said as lists: what is into each other and by how much, what touches, what is nearer than the gap, each with where; and apart from those, what the design says is meant (Mk52.Clash.allow \"a part\" \"another\", called as the model is built). With against, the model's parts are held against another model's instead: a housing against what moves in it, moved. Run it after a change to an assembly, as the tests are run after a change to code. It says where the solids are, not whether the thing can be put together. A model of many parts takes a minute.",
       schema [ model_prop; ("against", prop "string" "Another model, to hold this one's parts against."); ("gap", prop "number" "Pairs nearer than this are listed. Default 0.3.") ] [],

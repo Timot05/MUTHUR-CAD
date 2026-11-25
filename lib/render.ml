@@ -8,7 +8,9 @@
 
    - The model: sphere tracing through the domain's box, each sample read with the
      decisions of the cell it is in (Octree), then one full evaluation at the hit for
-     the normal and the face. A face has the colour the page gives it.
+     the normal and the face. A face has the colour the page gives it; or, where the
+     picture is asked for in the model's own colours, the colour of the feature that
+     made it, and a light grey where that has none.
    - Edges: the extraction's curves, dark where seen and faint where hidden. *)
 
 type camera = { yaw : float; pitch : float; dist : float; target : float array option }
@@ -48,7 +50,7 @@ let blank ~w ~h =
   for y = 0 to h - 1 do for x = 0 to w - 1 do put im x y background done done;
   im
 
-let model ?(w = 800) ?(h = 600) ~camera ~lo ~hi (g : Graph.t) =
+let model ?(w = 800) ?(h = 600) ?colour ~camera ~lo ~hi (g : Graph.t) =
   let im = { w; h; rgb = Bytes.create (3 * w * h); depth = Array.make (w * h) infinity } in
   let v = view camera ~lo ~hi in
   let p = Prog.compile g in
@@ -81,9 +83,14 @@ let model ?(w = 800) ?(h = 600) ~camera ~lo ~hi (g : Graph.t) =
         let ln = sqrt (dot n n) in
         let within = dot n rd > 0. in
         let n = Array.map (fun k -> (if within then -.k else k) /. (if ln > 0. then ln else 1.)) n in
-        let hue = Float.rem (float_of_int s.face *. 0.61803398875) 1. in
-        let tone o = 0.62 +. (0.26 *. cos (6.2831853 *. (hue +. o))) in
-        let base = (tone 0., tone 0.33, tone 0.67) in
+        let base =
+          match colour with
+          | Some of_feature -> Option.value ~default:(0.72, 0.72, 0.72) (of_feature s.feature)
+          | None ->
+              let hue = Float.rem (float_of_int s.face *. 0.61803398875) 1. in
+              let tone o = 0.62 +. (0.26 *. cos (6.2831853 *. (hue +. o))) in
+              (tone 0., tone 0.33, tone 0.67)
+        in
         put im px py (lit (if within then lit base 0.72 else base) (light v n rd));
         im.depth.((w * py) + px) <- dot (Array.map2 ( -. ) x v.ro) v.fwd
       end

@@ -377,10 +377,13 @@ let extract ?(depth = 6) (m : Emit.t) =
 
 (* ---- A picture ---- *)
 
-(* The model as a PNG, made by the kernel (lib/render.ml), with its edges if asked for. *)
-let picture ?(w = 800) ?(h = 600) ?camera ?(edges = false) ?surface (m : Emit.t) =
+(* The model as a PNG, made by the kernel (lib/render.ml), with its edges if asked for;
+   each face in a colour of its own, or with [paint] each part in the colour its code
+   gives it. *)
+let picture ?(w = 800) ?(h = 600) ?camera ?(edges = false) ?(paint = false) ?surface (m : Emit.t) =
   let camera = match camera with Some c -> c | None -> { Render.yaw = 40.; pitch = 26.; dist = Render.fit ~w ~h; target = None } in
-  let im = Render.model ~w ~h ~camera ~lo:m.lo ~hi:m.hi m.built.graph in
+  let colour = if paint then Some (fun fid -> Option.bind (List.find_opt (fun (f : Graph.feature) -> f.fid = fid) m.built.features) (Emit.coloured m.built.features)) else None in
+  let im = Render.model ~w ~h ?colour ~camera ~lo:m.lo ~hi:m.hi m.built.graph in
   if edges then Render.lines ~camera ~lo:m.lo ~hi:m.hi (List.concat_map (fun (e : Extract.edge) -> e.pieces) (topology m).edges) im;
   (* a mesh: its triangles' edges in grey, those along creases in ink, none through the model *)
   Option.iter

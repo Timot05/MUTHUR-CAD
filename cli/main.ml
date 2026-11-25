@@ -27,7 +27,7 @@
                                      no graphics card: a PNG, whose path is printed. After
                                      the model, any of: yaw=40 pitch=26 (degrees; pitch 90
                                      looks straight down) distance=1.5 (domain diagonals
-                                     from the target) target=x,y,z edges mesh
+                                     from the target) target=x,y,z edges mesh paint
                                      size=800x600 out=file.png
      mk52 clash <model> [other]      whether its parts run into each other, touch, or are
                                      nearer than gap=0.3: every pair of them, and its
@@ -265,7 +265,7 @@ let () =
         let camera = { Render.yaw = num "yaw" 40.; pitch = num "pitch" 26.; dist = num "distance" (Render.fit ~w ~h); target } in
         let m = Project.model name in
         let surface = if List.mem "mesh" options then Some (snd (Project.mesh m)) else None in
-        let png = Project.picture ~w ~h ~camera ~edges:(List.mem "edges" options) ?surface m in
+        let png = Project.picture ~w ~h ~camera ~edges:(List.mem "edges" options) ~paint:(List.mem "paint" options) ?surface m in
         let out = match opt "out" with Some o -> o | None -> Place.picture m.name in
         Out_channel.with_open_bin out (fun oc -> output_string oc png);
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
