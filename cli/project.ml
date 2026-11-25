@@ -375,6 +375,94 @@ let section_text ?(cols = 100) (m : Emit.t) (k : cut) =
   if parts = [] then Buffer.add_string b "Nothing is solid in it.\n";
   Buffer.contents b
 
+(* ---- Clashes ---- *)
+
+(* A model's parts as solids, each with its name; and its bought parts as the points
+   they are held by. Where several have one name, each is also said by where it is. *)
+type thing = { said : string; called : string; solid : Clash.solid option; points : float array list; lo : float array; hi : float array }
+
+let things (m : Emit.t) =
+  let top, _ = part_of m in
+  let parts =
+    List.filter_map
+      (fun (f : Graph.feature) ->
+        match f.result with
+        | Some g when top f.fid = f.fid -> Option.map (fun (s : Clash.solid) -> { said = f.fname; called = f.fname; solid = Some s; points = []; lo = s.lo; hi = s.hi }) (Clash.solid ~lo:m.lo ~hi:m.hi g)
+        | _ -> None)
+      m.built.features
+  in
+  let meshes = Hashtbl.create 8 in
+  let mesh path = match Hashtbl.find_opt meshes path with Some v -> v | None -> let v = Asset.read path in Hashtbl.replace meshes path v; v in
+  let bought =
+    List.map
+      (fun (a : Asset.placed) ->
+        let points = Clash.points a.frame (mesh a.path) in
+        let over f = Array.init 3 (fun i -> List.fold_left (fun v (x : float array) -> f v x.(i)) (List.hd points).(i) points) in
+        { said = a.name; called = a.name; solid = None; points; lo = over Float.min; hi = over Float.max })
+      m.built.assets
+  in
+  let all = parts @ bought in
+  List.map (fun t -> if List.length (List.filter (fun o -> o.called = t.called) all) > 1 then { t with said = Printf.sprintf "%s at (%.4g, %.4g, %.4g)" t.called (0.5 *. (t.lo.(0) +. t.hi.(0))) (0.5 *. (t.lo.(1) +. t.hi.(1))) (0.5 *. (t.lo.(2) +. t.hi.(2))) } else t) all
+
+(* What is found between two things: how far apart at their nearest (below zero: how far
+   into each other), and where. *)
+type found = { one : thing; other : thing; clear : float; where : float array }
+
+let touching = 0.02
+
+(* Every pair of a model's things, or every one of its things against every one of
+   another model's: those that are into each other, that touch, or that are nearer than
+   [limit]. Two bought parts are not held against each other. With how many pairs there
+   were, and how many had their boxes near enough to be looked at. *)
+let clashes ?(limit = 0.3) ?against (m : Emit.t) =
+  let mine = things m in
+  let pairs =
+    match against with
+    | Some (o : Emit.t) -> List.concat_map (fun a -> List.map (fun b -> (a, b)) (things o)) mine
+    | None -> let rec go = function a :: rest -> List.map (fun b -> (a, b)) rest @ go rest | [] -> [] in go mine
+  in
+  let pairs = List.filter (fun (a, b) -> a.solid <> None || b.solid <> None) pairs in
+  let near (a, b) = Array.for_all Fun.id (Array.init 3 (fun i -> a.lo.(i) -. limit <= b.hi.(i) && b.lo.(i) -. limit <= a.hi.(i))) in
+  let looked = List.filter near pairs in
+  let found =
+    List.filter_map
+      (fun (a, b) ->
+        let r = match (a.solid, b.solid) with Some s, Some s' -> Clash.clearance ~limit s s' | Some s, None -> Clash.against ~limit s b.points | None, Some s -> Clash.against ~limit s a.points | None, None -> None in
+        Option.map (fun (clear, where) -> { one = a; other = b; clear; where }) r)
+      looked
+  in
+  (List.sort (fun x y -> compare x.clear y.clear) found, List.length pairs, List.length looked, List.length mine)
+
+(* The same, said: first what is into each other, then what touches, then what is near;
+   pairs of the same two names together, with the worst of them; and apart, what the
+   design says is meant (Clash.allow). *)
+let clash ?(limit = 0.3) ?against (m : Emit.t) =
+  let found, pairs, looked, count = clashes ~limit ?against m in
+  let meant = m.built.meant @ (match against with Some (o : Emit.t) -> o.built.meant | None -> []) in
+  let is_meant f = List.exists (fun (a, b) -> (a = f.one.called && b = f.other.called) || (a = f.other.called && b = f.one.called)) meant in
+  let said_meant, rest = List.partition is_meant found in
+  let grouped fs =
+    let keys = List.sort_uniq compare (List.map (fun f -> (f.one.called, f.other.called)) fs) in
+    let groups = List.map (fun k -> List.filter (fun f -> (f.one.called, f.other.called) = k) fs) keys in
+    List.sort (fun a b -> compare (List.hd a).clear (List.hd b).clear) groups
+  in
+  let line fs =
+    let worst = List.hd fs in
+    let amount = if worst.clear < -.touching then Printf.sprintf "%.3g into each other" (-.worst.clear) else if worst.clear <= touching then "touching" else Printf.sprintf "%.3g apart" worst.clear in
+    let where = Printf.sprintf "at (%.4g, %.4g, %.4g)" worst.where.(0) worst.where.(1) worst.where.(2) in
+    match fs with
+    | [ f ] -> Printf.sprintf "  %s | %s: %s, %s" f.one.said f.other.said amount where
+    | _ ->
+        let last = List.nth fs (List.length fs - 1) in
+        Printf.sprintf "  %s | %s, %d pairs: %s%s, the worst %s" worst.one.called worst.other.called (List.length fs) amount (if Float.abs (last.clear -. worst.clear) > 0.005 then Printf.sprintf " at worst, %.3g at best" last.clear else "") where
+  in
+  let section title fs = if fs = [] then [] else (Printf.sprintf "%s (%d):" title (List.length fs)) :: List.map line (grouped fs) in
+  let into = List.filter (fun f -> f.clear < -.touching) rest and touch = List.filter (fun f -> Float.abs f.clear <= touching) rest and close = List.filter (fun f -> f.clear > touching) rest in
+  String.concat "\n"
+    ([ Printf.sprintf "%s%s: %d parts, %d of them bought and held by their triangles' points; %d pairs, %d near enough to look at." m.name (match against with Some o -> " against " ^ o.name | None -> "") count (List.length m.built.assets) pairs looked ]
+    @ (if rest = [] then [ Printf.sprintf "Nothing is into anything else, touches it, or is nearer than %g%s." limit (if said_meant = [] then "" else ", but for what is meant") ] else [])
+    @ section "Into each other" into @ section "Touching" touch @ section (Printf.sprintf "Nearer than %g" limit) close @ section "Meant by the design" said_meant)
+
 (* ---- A mesh ---- *)
 
 (* A model in the box of its mesh, a twentieth more all round, for a picture of the mesh. *)
@@ -420,6 +508,7 @@ let brief name =
           "HOW TO WORK, from this folder. The person has the page open beside their editor: a model that is open is built again, by itself, each time a file is saved, so they see what you do as you do it.";
           Printf.sprintf "  mk52 picture %s  a picture of it, made by the kernel, as a PNG whose path is printed: look at it. Add yaw= pitch= distance= target=x,y,z to look from elsewhere, edges for its edges" name;
           Printf.sprintf "  mk52 section %s z=0  a cut through it where z is 0 (or x=, y=), the parts in colours with a scale: for what is inside it or between its parts. The other two coordinates from:to look closer, as x=10:20; text gives it as letters" name;
+          Printf.sprintf "  mk52 clash %s  if it is of several parts: which of them run into each other, touch, or are nearer than gap=0.3, its bought parts too. What is meant to touch is said in the code, as the model is built: Mk52.Clash.allow \"a part\" \"another\"" name;
           Printf.sprintf "  mk52 extract %s  its edges and corners, with every flag: a place where the model may not be what was meant" name;
           Printf.sprintf "  mk52 outline %s  if it is a flat part, a board: its outline, holes too, as a DXF file of lines, arcs and circles" name;
           Printf.sprintf "  mk52 view %s     opens it in the person's page, in front" name;

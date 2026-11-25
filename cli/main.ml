@@ -29,6 +29,10 @@
                                      looks straight down) distance=1.5 (domain diagonals
                                      from the target) target=x,y,z edges mesh
                                      size=800x600 out=file.png
+     mk52 clash <model> [other]      whether its parts run into each other, touch, or are
+                                     nearer than gap=0.3: every pair of them, and its
+                                     bought parts against them; or its parts against
+                                     another model's, as a housing against what moves
      mk52 section <model> z=-4.5     a cut through it, as a picture: what is solid in the
                                      plane where that coordinate (x=, y= or z=) is that
                                      number, each part in a colour of its own, with a
@@ -64,7 +68,7 @@
    kernel, as it is now. *)
 open Mk52
 
-let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | section <model> x=|y=|z=<number> [the others from:to] [paint] [text] [width=] [columns=] [out=] | new <project> <file> | brief <model> | mcp | install"
+let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | clash <model> [other model] [gap=0.3] | section <model> x=|y=|z=<number> [the others from:to] [paint] [text] [width=] [columns=] [out=] | new <project> <file> | brief <model> | mcp | install"
 let home = Place.home ()
 
 (* The design folder: here or above, the folder with a dune-project and the link to the tool. *)
@@ -214,6 +218,10 @@ let () =
         Out_channel.with_open_bin out (fun oc -> output_string oc dxf);
         print_endline text;
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
+    | "clash" :: name :: options ->
+        let limit = List.find_map (fun o -> if String.length o > 4 && String.sub o 0 4 = "gap=" then Some (match float_of_string_opt (String.sub o 4 (String.length o - 4)) with Some v when v >= 0. -> v | _ -> failwith "gap is a length, as gap=0.3") else None) options in
+        let against = match List.filter (fun o -> not (String.contains o '=')) options with [] -> None | [ other ] -> Some (Project.model other) | _ -> failwith "after the model: another model to hold it against, and gap=0.3" in
+        print_endline (Project.clash ?limit ?against (Project.model name))
     | "section" :: name :: options ->
         let opt k = List.find_map (fun o -> match String.index_opt o '=' with Some i when String.sub o 0 i = k -> Some (String.sub o (i + 1) (String.length o - i - 1)) | _ -> None) options in
         let number k v = match float_of_string_opt v with Some x -> x | None -> failwith (k ^ " is a number, or from:to") in

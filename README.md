@@ -29,6 +29,7 @@ Edit `lamp/base.ml` in your editor; every time a file is saved the project is bu
 | `mk52 picture <model> [...]` | a picture made by the kernel, with no page and no graphics card: a PNG whose path is printed. `yaw=` `pitch=` `distance=` `target=x,y,z` `edges` `mesh` `size=800x600` `out=` |
 | `mk52 extract <model> [32\|64\|128]` | its edges and corners, printed with every flag, and drawn in the page if the model is open |
 | `mk52 outline <model> [out=file.dxf]` | the outline of a flat part, a board's: the edges round its top, holes too, as the lines, arcs and circles they are, in a DXF file in mm |
+| `mk52 clash <model> [other] [gap=0.3]` | whether its parts run into each other, touch, or are nearer than the gap: every pair, and its bought parts against them; or its parts against another model's. What a design says is meant (`Clash.allow`) is listed apart |
 | `mk52 section <model> z=<n>` | a cut through it where that coordinate (`x=`, `y=` or `z=`) is that number: what is solid, each part in a colour of its own, with a scale; the other two `from:to` to look closer; `text` for the cut as letters |
 | `mk52 mesh <model> [cells] [raw]` | its surface as even triangles attached to its creases and corners: an STL file, what the mesh is like, and a picture |
 | `mk52 brief <model>` | what an agent working on that function is told |
@@ -181,6 +182,7 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `lib/extract.ml` | 674 | edges and corners: seed, walk, cut, assemble, flag |
 | `lib/surface.ml` | 697 | a triangle mesh of the surface, attached to its creases and corners |
 | `lib/dxf.ml` | 162 | a flat part's outline, traced, as the lines, arcs and circles it is, in a DXF file |
+| `lib/clash.ml` | 98 | two solids' clearance, by the least of the larger of their fields; a bought part's points against a solid; what a design says is meant to touch |
 | `lib/shader.ml` | 240 | the compiled program as a WGSL function, its chains in gates, and the table of where each gate is entered |
 | `lib/step.ml`, `mesh.ml` | 804 | a STEP file read (planes, cylinders, cones, spheres, tori, NURBS; assemblies), and its faces cut into triangles: mk49's, as they were |
 | `lib/asset.ml` | 117 | something made elsewhere shown with a model: where a model's code puts it, and its triangles from a STEP or an STL file |
@@ -191,9 +193,9 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `cli/project.ml` | 316 | models by name, built: a project compiled once and any of its functions built from it |
 | `cli/scene.ml` | 128 | what the page asks: how a model is drawn, its regions, what a ray hits |
 | `cli/serve.ml` | 209 | the page's server: the folder's files, the command run, the code watched |
-| `cli/mcp.ml` | 145 | tools for an agent: `picture`, `section`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
+| `cli/mcp.ml` | 145 | tools for an agent: `picture`, `section`, `clash`, `kernel_probe`, `kernel_extract`, `viewer_state`, `feature_brief` |
 | `web/view.html` | 1174 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
-| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 225 checks (`dune test`, 15 s), and mk49's experiments |
+| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 232 checks (`dune test`, 15 s), and mk49's experiments |
 
 ## Not there
 

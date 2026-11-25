@@ -394,6 +394,22 @@ let cuts () =
     (match parts with [ (_, (u0, u1), (v0, v1)) ] -> Float.abs (u0 +. 2.) < 0.05 && Float.abs (u1 -. 2.) < 0.05 && Float.abs (v0 +. 2.) < 0.05 && Float.abs (v1 -. 2.) < 0.05 | _ -> false)
     (String.concat "; " (List.map (fun (id, (u0, u1), (v0, v1)) -> Printf.sprintf "%d: %.2f..%.2f, %.2f..%.2f" id u0 u1 v0 v1) parts))
 
+(* Two solids' clearance (Clash): balls of radius 2 whose middles are 4.5 apart are 0.5
+   apart; 3.6 apart, 0.4 into each other; 4 apart, they touch; and far apart, nothing is
+   said. A point of a shown part inside a solid is found, with how deep. *)
+let clashes () =
+  let lo = [| -8.; -8.; -8. |] and hi = [| 8.; 8.; 8. |] in
+  let ball x = match Clash.solid ~lo ~hi (Solid.sphere "ball" (x, 0., 0.) 2.) with Some s -> s | None -> failwith "a ball has a surface" in
+  let said = function Some (c, (at : float array)) -> Printf.sprintf "%.4f at (%.2f, %.2f, %.2f)" c at.(0) at.(1) at.(2) | None -> "nothing" in
+  let is name r right = check ("clashes: " ^ name) (right r) (said r) in
+  is "two balls half a millimetre apart" (Clash.clearance ~limit:1. (ball 0.) (ball 4.5)) (function Some (c, at) -> Float.abs (c -. 0.5) < 0.01 && Float.abs (at.(0) -. 2.25) < 0.05 | None -> false);
+  is "two balls 0.4 into each other" (Clash.clearance (ball 0.) (ball 3.6)) (function Some (c, _) -> Float.abs (c +. 0.4) < 0.01 | None -> false);
+  is "two balls that touch" (Clash.clearance (ball 0.) (ball 4.)) (function Some (c, _) -> Float.abs c < 0.01 | None -> false);
+  is "two balls further apart than was asked about" (Clash.clearance ~limit:0.3 (ball 0.) (ball 4.5)) (fun r -> r = None);
+  is "two balls nowhere near" (Clash.clearance (ball (-5.)) (ball 5.)) (fun r -> r = None);
+  is "a shown part's point inside a solid" (Clash.against (ball 0.) [ [| 5.; 0.; 0. |]; [| 1.5; 0.; 0. |]; [| 0.; 3.; 0. |] ]) (function Some (c, at) -> Float.abs (c +. 0.5) < 1e-6 && at.(0) = 1.5 | None -> false);
+  is "a shown part's points all away from a solid" (Clash.against (ball 0.) [ [| 5.; 0.; 0. |]; [| 0.; 3.; 0. |] ]) (fun r -> r = None)
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -409,4 +425,5 @@ let () =
   assets ();
   outlines ();
   cuts ();
+  clashes ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)
