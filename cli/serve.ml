@@ -17,7 +17,8 @@
                                      each (mk52 regions)
      GET  /asset?id=                 something a model shows from outside, as triangles
      GET  /edges?name=               its edges and corners, or null
-     GET  /pick?name=&solo=&ray=     what a ray hits (mk52 pick): ox,oy,oz,dx,dy,dz
+     GET  /pick?name=&solo=&ray=     what a ray hits (mk52 pick): ox,oy,oz,dx,dy,dz; with cut=nx,ny,nz,off,
+                                     in the picture as that plane cuts it
      POST /close?name=               mk52 close, for the person
      POST /state?name=               what the page shows of a model, kept for an agent *)
 open Mk52
@@ -161,9 +162,8 @@ let answer port r =
       ("application/octet-stream", file (Place.asset id))
   | "GET", "/edges" -> (json, try read (Place.edges (name ())) with Sys_error _ -> "null")
   | "GET", "/pick" ->
-      let ray = String.split_on_char ',' (param "ray") in
-      if List.length ray <> 6 || List.exists (fun v -> float_of_string_opt v = None) ray then refuse "400 Bad Request" "ray is ox,oy,oz,dx,dy,dz";
-      asked ([ "pick"; name (); view () ] @ ray)
+      let numbers k n = let v = String.split_on_char ',' (param k) in if List.length v <> n || List.exists (fun x -> float_of_string_opt x = None) v then refuse "400 Bad Request" (Printf.sprintf "%s is %d numbers" k n) else v in
+      asked ([ "pick"; name (); view () ] @ numbers "ray" 6 @ if List.mem_assoc "cut" r.query then numbers "cut" 4 else [])
   | "POST", "/close" ->
       let ok, printed, err = run [ "close"; name () ] in
       (json, Json.to_string (Json.Obj [ ("ok", Json.Bool ok); ("said", Json.Str (if ok then "" else String.trim (printed ^ err))) ]))

@@ -36,7 +36,7 @@ let pretty j =
 
 let tools =
   [ ( "viewer_state",
-      "What the person is looking at and pointing at in a model open in the page: the feature or face highlighted, the last points they picked, the camera. Call this when they say \"this face\", \"here\", \"what I selected\". The view is the person's: nothing here changes it.",
+      "What the person is looking at and pointing at in a model open in the page: the feature or face highlighted, the last points they picked, the camera, the plane they have cut the picture by (section) and what they have measured (measured: for each measurement the two points and their faces, how far apart, and how far apart or at what angle the faces are). Call this when they say \"this face\", \"here\", \"what I selected\", \"this gap\", \"what I measured\". The view is the person's: nothing here changes it.",
       schema [ model_prop ] [],
       fun args ->
         let model = model_of args in

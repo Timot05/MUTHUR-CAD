@@ -322,7 +322,16 @@ let regions name most =
   let r = Region.cut ~most h.p h.c ~lo ~hi in
   Random.init 5;
   let within (g : Region.region) x = x.(0) >= g.lo.(0) && x.(1) >= g.lo.(1) && x.(2) >= g.lo.(2) && x.(0) <= g.hi.(0) && x.(1) <= g.hi.(1) && x.(2) <= g.hi.(2) in
-  let wrong = ref 0 and furthest = ref 0. and outside = ref 0 in
+  let wrong = ref 0 and furthest = ref 0. and outside = ref 0 and hollow = ref 0 and lost = ref 0 in
+  let inside (lo, hi) x = x.(0) >= lo.(0) && x.(1) >= lo.(1) && x.(2) >= lo.(2) && x.(0) <= hi.(0) && x.(1) <= hi.(1) && x.(2) <= hi.(2) in
+  (* the cells kept as solid are solid all through *)
+  Array.iter
+    (fun (l, u) ->
+      for _ = 1 to 50 do
+        let x = Array.init 3 (fun a -> l.(a) +. Random.float (u.(a) -. l.(a))) in
+        if not ((probe h x).d.v < 0.) then incr hollow
+      done)
+    r.solid;
   Array.iter
     (fun (g : Region.region) ->
       for _ = 1 to 200 do
@@ -335,12 +344,16 @@ let regions name most =
     r.regions;
   for _ = 1 to 20_000 do
     let x = Array.init 3 (fun a -> lo.(a) +. Random.float (hi.(a) -. lo.(a))) in
-    if Float.abs (probe h x).d.v < 1e-3 *. h.diag && not (Array.exists (fun g -> within g x) r.regions) then incr outside
+    let v = (probe h x).d.v in
+    if Float.abs v < 1e-3 *. h.diag && not (Array.exists (fun g -> within g x) r.regions) then incr outside;
+    (* and every point of the solid is in a region or in one of those cells *)
+    if v < 0. && not (Array.exists (fun g -> within g x) r.regions || Array.exists (fun b -> inside b x) r.solid) then incr lost
   done;
   check
     (Printf.sprintf "%s: cut into %d regions, %d shaders" name (Array.length r.regions) (Array.length r.shaders))
-    (!wrong = 0 && !outside = 0 && Array.length r.regions > 0)
-    (Printf.sprintf "the field differs at %d points of the regions, by %g at most; %d points near the surface are in no region" !wrong !furthest !outside)
+    (!wrong = 0 && !outside = 0 && !hollow = 0 && !lost = 0 && Array.length r.regions > 0)
+    (Printf.sprintf "the field differs at %d points of the regions, by %g at most; %d points near the surface are in no region; %d points of its %d solid cells are not in the solid; %d points of the solid are in no region or cell"
+       !wrong !furthest !outside !hollow (Array.length r.solid) !lost)
 
 (* ---- What a model shows from outside ---- *)
 
@@ -529,6 +542,23 @@ let groups () =
   let empty = Graph.group pos "nothing in it" (fun () -> 3) in
   check "groups: one with no feature in it has no solid" (empty = 3 && (by "nothing in it").result = None) ""
 
+(* A picture cut by a plane (Render.kept): what is beyond the plane is left out, so a ray
+   is taken only where the model is kept, and it is known where it comes in through the
+   plane. *)
+let kept () =
+  let cut = ([| 0.; 0.; 1. |], 3.) in
+  let said (a, b, through) = Printf.sprintf "%g to %g%s" a b (if through then ", through the cut" else "") in
+  let down = Render.kept cut [| 0.; 0.; 10. |] [| 0.; 0.; -1. |] (0., 20.) in
+  check "a cut: a ray from beyond it starts at the plane, through it" (down = (7., 20., true)) (said down);
+  let up = Render.kept cut [| 0.; 0.; 0. |] [| 0.; 0.; 1. |] (0., 20.) in
+  check "a cut: a ray towards it ends at the plane" (up = (0., 3., false)) (said up);
+  let within = Render.kept cut [| 0.; 0.; 2. |] [| 0.; 0.; -1. |] (1., 20.) in
+  check "a cut: a ray from what is kept, going on into it, is left whole" (within = (1., 20., false)) (said within);
+  let (a, b, _) as along = Render.kept cut [| 0.; 0.; 5. |] [| 1.; 0.; 0. |] (0., 20.) in
+  check "a cut: a ray beyond it and along it is left nothing" (a >= b) (said along);
+  let late = Render.kept cut [| 0.; 0.; 10. |] [| 0.; 0.; -1. |] (8., 20.) in
+  check "a cut: one that is past the plane before it reaches the model does not come in through it" (late = (8., 20., false)) (said late)
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -549,4 +579,5 @@ let () =
   builder ();
   skins ();
   groups ();
+  kept ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

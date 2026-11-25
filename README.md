@@ -13,7 +13,7 @@ It is an implicit kernel: a solid is a function of space, negative inside and po
 ## What it does
 
 - **Parts as code.** A part is a function that returns a solid. Features are named, nest, and sit in frames, so a feature is moved by moving its frame. Features that belong together are put in a group, which the page opens, shuts, hides and shows as one.
-- **A page that follows your editor.** Every time a file is saved the project is built again and the page redraws what is open, on the graphics card.
+- **A page that follows your editor.** Every time a file is saved the project is built again and the page redraws what is open, on the graphics card. Section cuts the picture open by a plane you slide through the model, and Measure gives the distance between two points you click, with the gap or the angle between their faces.
 - **Pictures and cuts without the page.** `mk52 picture` and `mk52 section` are made by the kernel itself, so they work in a terminal, in a script, or for an AI agent.
 - **Checks.** `mk52 clash` says which parts of an assembly run into each other, touch, or come too near. `mk52 skins` finds faces of no thickness, where a cut did not go quite far enough. `mk52 extract` finds every edge and corner and flags what looks unintended.
 - **Things to take away.** An STL mesh (`mk52 mesh`), and a DXF outline of a flat part such as a circuit board (`mk52 outline`).
@@ -148,7 +148,7 @@ What there is to build with is the kernel's own code, which a design folder reac
 
 ## For AI agents
 
-`mk52 init` writes a `.mcp.json` in the design folder, which offers the kernel to an agent as tools: `picture`, `section`, `clash`, `skins`, `kernel_probe` (the solid's value at points), `kernel_extract`, `viewer_state` (what you have picked in the page) and `feature_brief` (how to work on one function). An agent works in your editor's files and looks at the result through these, without the page.
+`mk52 init` writes a `.mcp.json` in the design folder, which offers the kernel to an agent as tools: `picture`, `section`, `clash`, `skins`, `kernel_probe` (the solid's value at points), `kernel_extract`, `viewer_state` (what you have picked, cut and measured in the page) and `feature_brief` (how to work on one function). An agent works in your editor's files and looks at the result through these, without the page.
 
 ## Two ways to build a design
 

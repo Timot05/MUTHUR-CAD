@@ -54,6 +54,7 @@
   main { flex: 1; position: relative; min-width: 0; height: 100%; overflow: hidden; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; outline: none; }
   canvas:active { cursor: grabbing; }
+  canvas.measuring { cursor: crosshair; }
   button { font: inherit; color: inherit; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
@@ -119,16 +120,33 @@
 
   /* ---- Over the picture: boxes ruled in black ---- */
   .box { background: var(--paper); border: 1px solid var(--rule); }
-  #viewbar { position: absolute; left: 50%; bottom: var(--s4); transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); width: max-content; max-width: calc(100% - 2 * var(--s4)); }
+  #viewbar { position: absolute; left: 50%; bottom: var(--s4); transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: var(--s2); width: max-content; max-width: calc(100% - 2 * var(--s4)); }
+  #viewbar .bar { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); }
   #viewbar .group { display: flex; background: var(--paper); border: 1px solid var(--rule); }
   #viewbar button { all: unset; box-sizing: border-box; height: var(--bar); padding: 0 var(--s3); font-size: 12px; color: var(--ink-2); white-space: nowrap; cursor: pointer; }
   #viewbar button + button { border-left: 1px solid var(--rule); }
   #viewbar button:hover { color: var(--ink); background: var(--hover); }
   #viewbar button[aria-pressed="true"] { color: var(--paper); background: var(--ink); }
   #viewbar button:disabled { color: var(--ink-3); pointer-events: none; }
-  #clicked { position: absolute; left: var(--s4); top: var(--s4); max-width: calc(100% - 2 * var(--s4)); display: flex; align-items: baseline; gap: var(--s3); padding: 6px var(--s3); }
+  /* the cut's own bar: its axis, where along it, and which side is left out */
+  #cutbar { align-items: center; }
+  #cutbar input[type=range] { width: 220px; margin: 0 var(--s3); accent-color: var(--ink); }
+  #cutbar input[type=number] { all: unset; box-sizing: border-box; width: 80px; height: var(--bar); padding: 0 var(--s2); border-left: 1px solid var(--rule); font: 12px var(--mono); text-align: right; }
+  #cutbar input + button { border-left: 1px solid var(--rule); }
+  #clicked { position: absolute; left: var(--s4); top: var(--s4); max-width: calc(100% - 2 * var(--s4)); display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); padding: 6px var(--s3); }
+  #clicked .text { margin-left: auto; }
   #clicked b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #clicked span { color: var(--ink-2); white-space: nowrap; font: var(--small) var(--mono); }
+  /* what is measured, over the picture: a label at the middle of each, and while one is
+     being made a line from its start to the pointer */
+  #measures { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  #measures svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #measures line { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .measure { position: absolute; display: flex; transform: translate(-50%, -50%); background: var(--accent); color: var(--paper); font: 650 var(--small)/1 var(--mono); white-space: nowrap; pointer-events: auto; cursor: pointer; }
+  .measure.on { outline: 2px solid var(--ink); }
+  .measure span { padding: 4px 6px; }
+  .measure button { all: unset; padding: 4px 6px 4px 5px; border-left: 1px solid color-mix(in srgb, var(--paper) 45%, transparent); cursor: pointer; }
+  .measure button:hover { background: var(--ink); }
   #notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--ink-2); text-align: center; pointer-events: none; }
 </style>
 
@@ -140,8 +158,18 @@
 <main>
   <canvas tabindex="0" aria-label="The model"></canvas>
   <div id="notice" hidden></div>
+  <div id="measures"><svg aria-hidden="true"><line hidden></line></svg></div>
   <div id="clicked" class="box" hidden></div>
   <div id="viewbar">
+    <div class="group" id="cutbar" hidden>
+      <button data-axis="0" title="Cut square to x">X</button>
+      <button data-axis="1" title="Cut square to y">Y</button>
+      <button data-axis="2" title="Cut square to z">Z</button>
+      <input id="cutAt" type="range" aria-label="Where the cut is, along its axis">
+      <input id="cutNumber" type="number" step="0.1" aria-label="Where the cut is, in millimetres" title="Where the cut is, in millimetres">
+      <button id="cutFlip" aria-pressed="false" title="Leave out the other side of the cut">Flip</button>
+    </div>
+    <div class="bar">
     <div class="group">
       <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found: mk52 extract &lt;model&gt;">Edges</button>
       <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
@@ -150,7 +178,12 @@
       <button id="faces" aria-pressed="true" title="Each face in a colour of its own, and what is picked out shown. Off: the object as it is, every part in the colour its code gives it, grey where it gives none.">Faces</button>
     </div>
     <div class="group">
+      <button id="cutting" aria-pressed="false" title="Cut the picture by a plane: what is beyond it is left out, and the solid is shown cut, hatched">Section</button>
+      <button id="measuring" aria-pressed="false" title="Measure between two points of the model: click one, then the other. What is measured stays over the picture until it is removed.">Measure</button>
+    </div>
+    <div class="group">
       <button id="fit" title="Fit the model in the picture (F)">Fit</button>
+    </div>
     </div>
   </div>
 </main>
@@ -171,6 +204,16 @@ const canvas = document.querySelector('canvas')
 // last point clicked.
 let opened = [], current = null, scene = null, edges = null
 let feature = 0, face = -1, solo = 0, picked = null, hidden = new Set()
+// The cut: a plane square to an axis, at a place along it (null: the middle of the
+// model). What is beyond it is left out of the picture, or with flip what is before it,
+// and the solid is shown cut.
+const section = { on: false, axis: 2, at: null, flip: false }
+// What is measured in the model in front. Each measurement is two points clicked (a, b:
+// where, on which face, and which way that faces), and stays until it is removed.
+// `measuring`: whether clicks are ends; `started`: the first end of one being made;
+// `spelt`: the measurement whose numbers are spelt out over the picture.
+let measuring = false, started = null, spelt = null
+const measures = []
 const show = { edges: true, sketches: true, frames: true, assets: true }
 let said = '', building = false, asking = 0, took = null
 // what was last seen of the folder: the model in front as the command wrote it, and the
@@ -229,9 +272,12 @@ struct Uniforms {
   chosen: vec4i,                                        // the feature picked out, the last feature made in it, the face picked out (-1: none), whether faces are shown
   project: mat4x4f,                                     // the world to the picture, for what is drawn over the model
   line: vec4f,                                          // lines and dots: how far they are lifted towards the eye, device pixels a pixel
+  cut: vec4f,                                           // the cut: a plane's normal and how far along it; what is beyond is left out. Nothing: no cut
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(2) var paint: texture_2d<f32>;  // the colour of each feature that has one, by its number, in a row
+// Whether a point is beyond the cut, and so left out of the picture.
+fn beyond(p: vec3f) -> bool { return dot(u.cut.xyz, p) - u.cut.w > 4.0 * u.depth.x; }
 `
 // What the model's own compiled shader is given besides: where its gates are entered.
 const tabled = `@group(0) @binding(1) var table: texture_2d<u32>;
@@ -270,6 +316,28 @@ fn surfaced(h: vec3f, normal: vec3f, rd: vec3f, face: i32, feat: i32) -> Seen {
   seen.colour = vec4f(base * light, 1.0);
   return seen;
 }
+// The stretch of a ray that the cut leaves of tn..tf (x to y), and whether the ray comes
+// into it through the plane (z): there, inside the solid, what is seen is the cut itself
+// (lib/render.ml, kept).
+fn kept(ro: vec3f, rd: vec3f, tn: f32, tf: f32) -> vec3f {
+  if (dot(u.cut.xyz, u.cut.xyz) == 0.0) { return vec3f(tn, tf, 0.0); }
+  let s = dot(u.cut.xyz, ro) - u.cut.w; let rate = dot(u.cut.xyz, rd);
+  if (rate < 0.0) { let through = s / -rate; if (through > tn) { return vec3f(through, tf, 1.0); } return vec3f(tn, tf, 0.0); }
+  if (rate > 0.0) { return vec3f(tn, min(tf, -s / rate), 0.0); }
+  if (s > 0.0) { return vec3f(tn, tn, 0.0); }
+  return vec3f(tn, tf, 0.0);
+}
+// The solid where it is cut, at h, for the pixel at px: hatched, in its part's colour
+// where the parts' colours are shown, grey otherwise.
+fn sliced(h: vec3f, feat: i32, px: vec2f) -> Seen {
+  var base = vec3f(0.56);
+  if (u.chosen.w == 0) {
+    let own = textureLoad(paint, vec2u(u32(clamp(feat, 0, i32(textureDimensions(paint).x) - 1)), 0u), 0);
+    if (own.a > 0.0) { base = 0.9 * own.rgb; }
+  }
+  if (fract((px.x + px.y) / (7.0 * u.line.y)) < 0.18) { base *= 0.78; }
+  return Seen(vec4f(base, 1.0), deep(h));
+}
 `
 
 // The model: a ray a pixel, marched through the kernel's model().
@@ -284,16 +352,20 @@ const marching = `
   let tf = min(min(further.x, further.y), further.z);
   var seen: Seen; seen.colour = vec4f(u.back.xyz, 1.0); seen.depth = 1.0;
   if (tn >= tf) { return seen; }
+  let stretch = kept(ro, rd, tn, tf);
+  if (stretch.x >= stretch.y) { return seen; }
   // Sphere tracing inside the model's box, then four taps round the hit for the
   // normal: one loop, so model() is written into the shader once.
   var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
-  var t = tn; var hit = false; var h = vec3f(0); var n = vec3f(0); var face = -1; var feat = 0; var k = 0;
+  var t = stretch.x; var hit = false; var h = vec3f(0); var n = vec3f(0); var face = -1; var feat = 0; var k = 0;
   var touching = false; var medium = 0.0;
   for (var i = 0; i < 400; i++) {
     var q = ro + rd * t;
     if (hit) { q = h + u.depth.x * taps[k]; }
     var f = 0; var ft = 0;
     let d = model(q, &f, &ft, table, u.grid.xyz, u.grid.w, u.cells.xyz);
+    // through the cut and into the solid: the cut is what is seen
+    if (i == 0 && stretch.z == 1.0 && d < 0.0) { return sliced(q, ft, at.xy); }
     if (!hit) {
       // Where the box cuts the solid the ray starts inside it, and goes on to the
       // surface from within: a cut is left open, so a cavity shows through it.
@@ -304,12 +376,12 @@ const marching = `
       if (touching) {
         touching = false;
         if (d * medium < 0.0) { hit = true; }
-        else { if (medium == 0.0) { medium = sign(d); } t += abs(d) * u.size.w; if (t > tf) { break; } }
+        else { if (medium == 0.0) { medium = sign(d); } t += abs(d) * u.size.w; if (t > stretch.y) { break; } }
       } else if (abs(d) < u.depth.x) {
         touching = true; h = q; face = f; feat = ft;
         if (medium == 0.0) { medium = sign(d); }
         t += 2.0 * u.depth.x;
-      } else { medium = sign(d); t += abs(d) * u.size.w; if (t > tf) { break; } }
+      } else { medium = sign(d); t += abs(d) * u.size.w; if (t > stretch.y) { break; } }
     } else { n += taps[k] * d; k++; if (k == 4) { break; } }
   }
   if (!hit) { return seen; }
@@ -320,8 +392,11 @@ const marching = `
 @fragment fn faced(@builtin(position) at: vec4f) -> Seen {
   let r = reached(at);
   if (!r.hit) { return Seen(vec4f(u.back.xyz, 1.0), 1.0); }
+  // the solid cut open, with faces shown, is grey whatever it is of
+  if (r.cut && u.chosen.w != 0) { return sliced(r.at, 0, at.xy); }
   var face = -1; var feat = 0;
   _ = model(r.at, &face, &feat, table, u.grid.xyz, u.grid.w, u.cells.xyz);
+  if (r.cut) { return sliced(r.at, feat, at.xy); }
   return surfaced(r.at, r.normal, r.rd, face, feat);
 }
 `
@@ -329,17 +404,18 @@ const marching = `
 // What the model's regions found for a pixel (boxed, below), and the picture from that
 // alone, with nothing said of faces: no model is evaluated for it.
 const reaching = `
-@group(1) @binding(0) var found: texture_2d<f32>;  // a pixel: which way the surface faces, and how far along the pixel's ray it is (0: no surface)
-struct Reached { hit: bool, at: vec3f, normal: vec3f, rd: vec3f }
+@group(1) @binding(0) var found: texture_2d<f32>;  // a pixel: which way the surface faces, and how far along the pixel's ray it is (0: no surface; below 0: that far, and it is the solid cut open)
+struct Reached { hit: bool, at: vec3f, normal: vec3f, rd: vec3f, cut: bool }
 fn reached(at: vec4f) -> Reached {
   let f = textureLoad(found, vec2u(at.xy), 0);
   let uv = vec2f(2.0 * at.x - u.size.x, u.size.y - 2.0 * at.y) / u.size.y;
   let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
-  return Reached(f.w != 0.0, u.eye.xyz + rd * f.w, f.xyz, rd);
+  return Reached(f.w != 0.0, u.eye.xyz + rd * abs(f.w), f.xyz, rd, f.w < 0.0);
 }
 @fragment fn unfaced(@builtin(position) at: vec4f) -> Seen {
   let r = reached(at);
   if (!r.hit) { return Seen(vec4f(u.back.xyz, 1.0), 1.0); }
+  if (r.cut) { return sliced(r.at, 0, at.xy); }
   return surfaced(r.at, r.normal, r.rd, -1, 0);
 }
 `
@@ -350,6 +426,10 @@ fn reached(at: vec4f) -> Reached {
 // it leaves, through that short model(). Where regions lie behind one another along a
 // ray, the nearest hit is the one kept, by depth. Space that holds no surface has no
 // region, and costs nothing.
+//
+// Where the picture is cut, the solid cut open is the plane inside a region whose field
+// is below zero there; or inside one of the cells the kernel dropped for holding no
+// surface but kept as solid, each drawn as a box whose model() is below zero all over.
 //
 // The regions find where the surface is and which way it faces, not which face it is:
 // choosing a face at every evaluation of a march took most of a picture's time on one
@@ -373,8 +453,12 @@ fn cross_box(in: Box) -> Crossed {
   let rd = normalize(u.forward.xyz + u.size.z * (uv.x * u.right.xyz + uv.y * u.up.xyz));
   let t0 = (in.lo - ro) / rd; let t1 = (in.hi - ro) / rd;
   let nearer = min(t0, t1); let further = max(t0, t1);
-  let tn = max(max(nearer.x, nearer.y), max(nearer.z, 0.0));
-  let tf = min(min(further.x, further.y), further.z);
+  let into = max(max(nearer.x, nearer.y), max(nearer.z, 0.0));
+  let out = min(min(further.x, further.y), further.z);
+  if (into >= out) { return o; }
+  // of that, what the cut leaves
+  let stretch = kept(ro, rd, into, out);
+  let tn = stretch.x; let tf = stretch.y;
   if (tn >= tf) { return o; }
   // where the ray comes into the model's box at all: the solid is left open there
   let w0 = (u.lo.xyz - ro) / rd; let w1 = (u.hi.xyz - ro) / rd; let first = min(w0, w1);
@@ -387,6 +471,9 @@ fn cross_box(in: Box) -> Crossed {
     var q = ro + rd * t;
     if (o.hit) { q = o.at + u.depth.x * taps[k]; }
     let d = model(q);
+    // through the cut and into the solid: the cut is what is seen, and it is said by a
+    // distance below zero
+    if (i == 0 && stretch.z == 1.0 && d < 0.0) { o.hit = true; o.at = q; o.along = -t; o.normal = u.cut.xyz; return o; }
     if (!o.hit) {
       // past a skin as the whole model is marched (marched). A region's wall may lie as
       // near a skin as anything, so the first place in a region is treated like any
@@ -423,7 +510,7 @@ struct Found { @location(0) hit: vec4f, @builtin(frag_depth) depth: f32 }
 // it does not.
 const over = `
 override faint: f32 = 1.0;
-struct Drawn { @builtin(position) position: vec4f, @location(0) colour: vec4f, @location(1) at: vec2f }
+struct Drawn { @builtin(position) position: vec4f, @location(0) colour: vec4f, @location(1) at: vec2f, @location(2) world: vec3f }
 fn placed(p: vec3f) -> vec4f { return u.project * vec4f(p + normalize(u.eye.xyz - p) * u.line.x, 1.0); }
 // A line from a to b, half a width in pixels to each side.
 @vertex fn line_vertex(@builtin(vertex_index) id: u32, @location(0) a: vec3f, @location(1) b: vec3f, @location(2) colour: vec4f, @location(3) half: f32) -> Drawn {
@@ -433,17 +520,20 @@ fn placed(p: vec3f) -> vec4f { return u.project * vec4f(p + normalize(u.eye.xyz 
   var d = (cb.xy / cb.w - ca.xy / ca.w) * u.size.xy;
   if (length(d) > 0.0) { d = normalize(d); } else { d = vec2f(1, 0); }
   let q = mix(ca, cb, corner.x);
-  return Drawn(vec4f(q.xy + vec2f(-d.y, d.x) * corner.y * half * u.line.y * 2.0 / u.size.xy * q.w, q.zw), vec4f(colour.rgb, colour.a * faint), vec2f(0));
+  return Drawn(vec4f(q.xy + vec2f(-d.y, d.x) * corner.y * half * u.line.y * 2.0 / u.size.xy * q.w, q.zw), vec4f(colour.rgb, colour.a * faint), vec2f(0), mix(a, b, corner.x));
 }
 // A dot: where, its colour, and how wide in pixels.
 @vertex fn dot_vertex(@builtin(vertex_index) id: u32, @location(0) at: vec3f, @location(1) colour: vec4f, @location(2) size: f32) -> Drawn {
   var corners = array<vec2f, 6>(vec2f(-1, -1), vec2f(1, -1), vec2f(1, 1), vec2f(-1, -1), vec2f(1, 1), vec2f(-1, 1));
   let q = placed(at);
-  return Drawn(vec4f(q.xy + corners[id] * size * u.line.y / u.size.xy * q.w, q.zw), vec4f(colour.rgb, colour.a * faint), corners[id]);
+  return Drawn(vec4f(q.xy + corners[id] * size * u.line.y / u.size.xy * q.w, q.zw), vec4f(colour.rgb, colour.a * faint), corners[id], at);
 }
-@fragment fn line_fragment(in: Drawn) -> @location(0) vec4f { return in.colour; }
+@fragment fn line_fragment(in: Drawn) -> @location(0) vec4f {
+  if (beyond(in.world)) { discard; }
+  return in.colour;
+}
 @fragment fn dot_fragment(in: Drawn) -> @location(0) vec4f {
-  if (length(in.at) > 1.0) { discard; }
+  if (length(in.at) > 1.0 || beyond(in.world)) { discard; }
   return in.colour;
 }
 `
@@ -458,6 +548,7 @@ struct Placed { @builtin(position) position: vec4f, @location(0) world: vec3f, @
   return Placed(u.project * vec4f(world, 1.0), world, x * n.x + y * n.y + z * n.z, colour);
 }
 @fragment fn asset_fragment(in: Placed) -> @location(0) vec4f {
+  if (beyond(in.world)) { discard; }
   let rd = normalize(in.world - u.eye.xyz);
   var n = normalize(in.normal);
   if (dot(n, rd) > 0.0) { n = -n; }
@@ -484,6 +575,8 @@ const cut = () => model && (!told(model) || model.compiled?.faced) ? model.regio
 // what the regions find, a pixel: a picture of numbers; what it is read through, alone and beside
 // a model's own gates; and the pipeline that makes the picture of it with faces not shown
 let hits, found = null, relayed, unfaced
+// the pipeline for the boxes of what is solid all through: a model() that is below zero everywhere
+let solid
 // what a shader that reads no table of gates is given: the uniforms, and a table of nothing
 // and no colours
 let nothing, unpainted
@@ -507,12 +600,13 @@ async function graphics() {
   bound = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} }] })
   layout = device.createPipelineLayout({ bindGroupLayouts: [bound] })
-  uniforms = device.createBuffer({ size: 272, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+  uniforms = device.createBuffer({ size: 288, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
   hits = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }] })
   relayed = device.createPipelineLayout({ bindGroupLayouts: [bound, hits] })
   const reads = device.createShaderModule({ code: shared + framing + reaching })
   unfaced = device.createRenderPipeline({ layout: relayed, vertex: { module: reads, entryPoint: 'whole' }, fragment: { module: reads, entryPoint: 'unfaced', targets: [{ format }] },
                                           depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' } })
+  solid = device.createRenderPipeline(boxed(device.createShaderModule({ code: shared + 'fn model(p: vec3f) -> f32 { return -1.0; }\n' + framing + boxing })))
   nothing = device.createTexture({ size: [1, 1], format: 'rgba32uint', usage: GPUTextureUsage.TEXTURE_BINDING }).createView()
   unpainted = painted([]).createView()
   const module = device.createShaderModule({ code: shared + tabled + over })
@@ -636,21 +730,29 @@ const regioned = m => m.cutting ??= (async () => {
   const wrong = modules.length && (await modules[0].getCompilationInfo()).messages.find(m => m.type == 'error')
   if (wrong) throw new Error(`A region's shader does not compile: ${wrong.message} (line ${wrong.lineNum})`)
   const r = { count, runs }
-  // a pipeline for each shader: where the surface is, for a pixel of one of its boxes
-  r.drawn = await Promise.all(modules.map(module => device.createRenderPipelineAsync({
-    layout, primitive: { cullMode: 'front' }, depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
-    vertex: { module, entryPoint: 'box', buffers: [{ stepMode: 'instance', arrayStride: 24, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }] }] },
-    fragment: { module, entryPoint: 'boxed', targets: [{ format: 'rgba32float' }] },
-  })))
+  r.drawn = await Promise.all(modules.map(module => device.createRenderPipelineAsync(boxed(module))))
   if (m.gone) return
-  r.buffer = device.createBuffer({ size: Math.max(24, boxes.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
+  // the regions' boxes, and after them the cells that are solid all through
+  const cells = new Float32Array(made.solid ?? [])
+  r.solid = cells.length / 6
+  r.buffer = device.createBuffer({ size: Math.max(24, boxes.byteLength + cells.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
   device.queue.writeBuffer(r.buffer, 0, boxes)
+  device.queue.writeBuffer(r.buffer, boxes.byteLength, cells)
   m.regions = r
 })()
 
-// Every region's box, each through its shader's pipeline.
+// A pipeline for a shader of boxes: where the surface is, for a pixel of one of its boxes.
+const boxed = module => ({
+  layout, primitive: { cullMode: 'front' }, depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
+  vertex: { module, entryPoint: 'box', buffers: [{ stepMode: 'instance', arrayStride: 24, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }] }] },
+  fragment: { module, entryPoint: 'boxed', targets: [{ format: 'rgba32float' }] },
+})
+
+// Every region's box, each through its shader's pipeline; and with a cut, the solid
+// cells' boxes, for the solid cut open.
 function boxes(pass, r) {
   pass.setVertexBuffer(0, r.buffer)
+  if (section.on && r.solid) { pass.setPipeline(solid); pass.draw(36, r.solid, 0, r.count) }
   for (const run of r.runs) { pass.setPipeline(r.drawn[run.shader]); pass.draw(36, run.count, 0, run.first) }
 }
 
@@ -693,14 +795,25 @@ const given = c => c.given ??= device.createBindGroup({ layout: bound, entries: 
 
 function dropped(m) { if (m) m.gone = true; m?.assets.forEach(a => a.instances.destroy()); m?.regions?.buffer.destroy(); m?.compiled?.texture.destroy(); m?.compiled?.paint.destroy() }
 
+// Where the cut is along its axis: where it was put, kept inside the model's box.
+const cutAt = () => { const lo = scene.lo[section.axis], hi = scene.hi[section.axis]; return Math.min(hi, Math.max(lo, section.at ?? 0.5 * (lo + hi))) }
+// The cut as the shaders and the kernel take it: a normal and how far along it, what is
+// beyond being left out. Nothing where there is no cut.
+function plane() {
+  if (!section.on || !scene) return [0, 0, 0, 0]
+  const side = section.flip ? -1 : 1, normal = [0, 0, 0]
+  normal[section.axis] = side
+  return [...normal, side * cutAt()]
+}
+
 // The uniforms for a picture w by h of the model in front.
 function uniformed(w, h, back) {
-  const p = placed(), f = new Float32Array(68), n = new Int32Array(f.buffer), grid = scene.gates
+  const p = placed(), f = new Float32Array(72), n = new Int32Array(f.buffer), grid = scene.gates
   f.set(p.eye, 0); f.set(p.forward, 4); f.set(p.right, 8); f.set(p.up, 12)
   f.set(scene.lo, 16); f.set(scene.hi, 20); f.set(back, 24); f.set([...grid.lo, grid.cell], 28)
   f.set([w, h, tanHalf, scene.step], 32); f.set([p.diagonal * 2e-4, p.near, p.far], 36)
   n.set(grid.cells, 40); n.set([feature, last(feature), face, +faces], 44)
-  f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, density()], 64)
+  f.set(projection(p, w / h), 48); f.set([p.diagonal * 1.5e-3, density()], 64); f.set(plane(), 68)
   return f
 }
 
@@ -769,6 +882,7 @@ function draw() {
     encoder.copyBufferToBuffer(timer.resolved, 0, timer.read, 0, 16)
   }
   device.queue.submit([encoder.finish()])
+  overlaid()
   if (timing) {
     timer.reading = true
     timer.read.mapAsync(GPUMapMode.READ).then(() => {
@@ -798,6 +912,13 @@ function lay() {
     for (const f of edges.flags) points.push(...f.at, ...flag, 10)
   }
   if (scene && show.sketches) for (const sketch of scene.sketches.filter(s => !outOf(scene, s.feature))) for (const loop of sketch.loops) for (const span of loop) run(span.points, [0.55, 0.3, 0.75, 1], 0.8)
+  // what is measured: each end a blue dot ringed in white, and the line between the two
+  const blue = [0.12, 0.37, 0.84, 1], end = e => points.push(...e.at, 1, 1, 1, 1, 15, ...e.at, ...blue, 10)
+  if (scene) {
+    for (const m of measures) { line(m.a.at, m.b.at, blue, m == spelt ? 1.6 : 1.1); end(m.a); end(m.b) }
+    if (started) end(started)
+  }
+  labelled()
   if (scene && show.frames) {
     const long = 0.09 * length(sub(scene.hi, scene.lo))
     const frames = [[0, { o: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }], ...scene.features.filter(f => f.frame && !outOf(scene, f.id)).map(f => [f.id, f.frame])]
@@ -870,7 +991,7 @@ function follow() {
 function front(name) {
   if (name == current) return
   current = name; written = null; edges = null
-  feature = 0; face = -1; solo = 0; picked = null; hidden = new Set()
+  feature = 0; face = -1; solo = 0; picked = null; hidden = new Set(); measures.length = 0; started = null; spelt = null
   if (!name) { scene = null; dropped(model); model = null; lay() }
   follow()
   panel()
@@ -967,19 +1088,67 @@ function shown(f) {
   lay(); panel(); changed()
 }
 
-function deselect() { feature = 0; face = -1; picked = null; lay(); panel(); changed() }
+function deselect() { feature = 0; face = -1; picked = null; started = null; spelt = null; lay(); panel(); changed() }
 
 // A click at a point of the picture: what is there.
 async function pick(x, y) {
   if (!scene) return
   const name = current, p = placed()
   try {
-    const hit = await (await fetch('/pick' + about(name, `${viewed()}&ray=${[...p.eye, ...ray(p, x, y)].join(',')}`))).json()
+    const hit = await (await fetch('/pick' + about(name, `${viewed()}&ray=${[...p.eye, ...ray(p, x, y)].join(',')}${section.on ? '&cut=' + plane().join(',') : ''}`))).json()
     if (current != name) return
     picked = hit.hit ? hit : null
-    face = picked?.face_id ?? -1
+    face = measuring ? -1 : picked?.face_id ?? -1
+    // measuring, a point clicked is an end: the first of a measurement, then its second
+    if (measuring && picked) {
+      if (started) { spelt = { a: started, b: picked }; measures.push(spelt); started = null } else started = picked
+      lay()
+    } else if (!measuring) spelt = null
     panel(); changed()
   } catch { /* no answer: nothing is picked */ }
+}
+
+// What a measurement comes to: how far apart its ends are, and along each axis; and of
+// the faces they are on, how far apart those are where they are parallel, and the angle
+// between them where they are not.
+function measured({ a, b }) {
+  const along = sub(b.at, a.at), alike = Math.abs(dot(a.normal, b.normal))
+  return { distance: length(along), along, ...(alike > 0.9999 ? { faces_apart: Math.abs(dot(along, a.normal)) } : { faces_angle_degrees: Math.acos(alike) * 180 / Math.PI }) }
+}
+const mm = v => `${v.toFixed(Math.abs(v) < 10 ? 3 : 2)} mm`
+
+// A label for each measurement, at its middle: how long it is, and a mark to remove it.
+// Clicked, its numbers are spelt out over the picture.
+function labelled() {
+  $('measures').querySelectorAll('.measure').forEach(e => e.remove())
+  for (const m of measures) {
+    m.label = el('div', { className: 'measure' + (m == spelt ? ' on' : ''), title: 'Show what this measurement comes to', onclick: () => { spelt = m; lay(); panel() } },
+      el('span', {}, mm(measured(m).distance)),
+      el('button', { title: 'Remove this measurement', ariaLabel: 'Remove this measurement', onclick: e => { e.stopPropagation(); measures.splice(measures.indexOf(m), 1); if (spelt == m) spelt = null; lay(); panel(); changed() } }, '×'))
+    $('measures').append(m.label)
+  }
+}
+
+// Where a point of the model is in the picture, in the page's pixels; null behind the eye.
+function pictured(p, x) {
+  const w = canvas.clientWidth, h = canvas.clientHeight, m = projection(p, w / h)
+  const clip = [0, 1, 2, 3].map(r => m[r] * x[0] + m[4 + r] * x[1] + m[8 + r] * x[2] + m[12 + r])
+  return clip[3] > 0 ? [(0.5 + 0.5 * clip[0] / clip[3]) * w, (0.5 - 0.5 * clip[1] / clip[3]) * h] : null
+}
+
+// What lies over a picture just drawn, put where the picture has it: the labels, and
+// from the start of a measurement being made, a line to the pointer.
+let pointer = null
+function overlaid() {
+  const p = scene && placed(), rubber = $('measures').querySelector('line')
+  for (const m of measures) {
+    const at = p && pictured(p, times(add(m.a.at, m.b.at), 0.5))
+    m.label.hidden = !at
+    if (at) Object.assign(m.label.style, { left: at[0] + 'px', top: at[1] + 'px' })
+  }
+  const from = p && measuring && started && pointer && pictured(p, started.at)
+  rubber.toggleAttribute('hidden', !from)
+  if (from) for (const [k, v] of [['x1', from[0]], ['y1', from[1]], ['x2', pointer[0]], ['y2', pointer[1]]]) rubber.setAttribute(k, v)
 }
 
 // ---- For an agent: what the person is looking at ----
@@ -1000,6 +1169,8 @@ function changed() {
       alone: scene.features.find(f => f.id == solo)?.path ?? null,
       hidden: scene.features.filter(f => hidden.has(f.id)).map(f => f.path),
     }
+    if (section.on) state.section = { axis: 'xyz'[section.axis], at: cutAt(), left_out: section.flip ? 'below' : 'above' }
+    if (measures.length) state.measured = measures.map(m => ({ from: m.a.at, from_face: m.a.face, to: m.b.at, to_face: m.b.face, ...measured(m) }))
     if (picked) state.picked = { at: picked.at, face: picked.face, feature: picked.feature?.path ?? '', file: picked.feature?.file ?? '', line: picked.feature?.line ?? 0 }
     fetch('/state' + about(current), { method: 'POST', body: JSON.stringify(state) }).catch(() => {})
   }, 300)
@@ -1064,12 +1235,33 @@ function panel() {
   $('features').querySelector('.sum').textContent = scene?.name ?? ''
   $('features').querySelector('.body').replaceChildren(...(rows.length ? rows : [el('p', { className: 'empty' }, current ? 'Its shader is being made ready.' : 'Of the model in front.')]))
 
-  $('clicked').hidden = !picked
-  if (picked) $('clicked').replaceChildren(el('b', {}, picked.face), el('span', {}, 'at ' + picked.at.map(v => v.toFixed(2)).join(', ')), picked.feature && source(picked.feature))
+  // over the picture: what is being measured, what a measurement comes to, or what was clicked
+  const place = at => at.map(v => v.toFixed(2)).join(', ')
+  const clear = measures.length > 1 && action('Remove all', 'Remove every measurement', false, () => { measures.length = 0; spelt = null; lay(); panel(); changed() })
+  $('clicked').hidden = !(picked || measuring || spelt)
+  if (measuring && started) $('clicked').replaceChildren(el('b', {}, 'From ' + started.face), el('span', {}, 'at ' + place(started.at)), el('span', {}, 'click where it ends'))
+  else if (spelt) {
+    const m = measured(spelt)
+    $('clicked').replaceChildren(...[el('b', {}, mm(m.distance)), el('span', {}, `x ${m.along[0].toFixed(2)}, y ${m.along[1].toFixed(2)}, z ${m.along[2].toFixed(2)}`),
+      el('span', {}, m.faces_apart != null ? `the two faces ${mm(m.faces_apart)} apart` : `the two faces at ${m.faces_angle_degrees.toFixed(1)}°`),
+      el('span', {}, `${spelt.a.face} to ${spelt.b.face}`), clear].filter(Boolean))
+  } else if (measuring) $('clicked').replaceChildren(...[el('span', {}, 'Click where a measurement starts, then where it ends'), clear].filter(Boolean))
+  else if (picked) $('clicked').replaceChildren(el('b', {}, picked.face), el('span', {}, 'at ' + place(picked.at)), picked.feature && source(picked.feature))
+  cutbar()
   $('fit').disabled = !scene
   $('notice').hidden = !!scene
   if (!scene) $('notice').textContent = current ? '' : 'mk52 view <model>, in the design folder, opens a model here. mk52 models lists them.'
   status()
+}
+
+// The cut's bar, as the cut and the model in front are.
+function cutbar() {
+  $('cutbar').hidden = !section.on || !scene
+  if ($('cutbar').hidden) return
+  const lo = scene.lo[section.axis], hi = scene.hi[section.axis]
+  for (const b of $('cutbar').querySelectorAll('[data-axis]')) b.setAttribute('aria-pressed', b.dataset.axis == section.axis)
+  Object.assign($('cutAt'), { min: lo, max: hi, step: (hi - lo) / 1000, value: cutAt() })
+  if (document.activeElement != $('cutNumber')) $('cutNumber').value = cutAt().toFixed(2)
 }
 
 const ms = t => `${t < 10 ? t.toFixed(1) : Math.round(t)} ms`
@@ -1091,6 +1283,12 @@ for (const what of ['edges', 'sketches', 'frames', 'assets']) {
   button.onclick = () => { show[what] = !show[what]; button.setAttribute('aria-pressed', show[what]); lay() }
 }
 $('fit').onclick = fit
+$('cutting').onclick = () => { section.on = !section.on; $('cutting').setAttribute('aria-pressed', section.on); cutbar(); changed() }
+for (const b of $('cutbar').querySelectorAll('[data-axis]')) b.onclick = () => { section.axis = +b.dataset.axis; section.at = null; cutbar(); changed() }
+$('cutAt').oninput = () => { section.at = +$('cutAt').value; cutbar(); moving(); changed() }
+$('cutNumber').onchange = () => { if ($('cutNumber').value !== '') section.at = +$('cutNumber').value; cutbar(); changed() }
+$('cutFlip').onclick = () => { section.flip = !section.flip; $('cutFlip').setAttribute('aria-pressed', section.flip); changed() }
+$('measuring').onclick = () => { measuring = !measuring; started = null; $('measuring').setAttribute('aria-pressed', measuring); canvas.classList.toggle('measuring', measuring); lay(); panel() }
 // Faces changes what a model needs made ready: set, kept, and the model in front made ready for it.
 $('faces').setAttribute('aria-pressed', faces)
 $('faces').onclick = async () => {
@@ -1123,6 +1321,9 @@ canvas.onpointermove = e => {
 }
 canvas.onpointerup = e => { if (!moved && e.button == 0) pick(e.offsetX * density(), e.offsetY * density()) }
 canvas.oncontextmenu = e => e.preventDefault()
+// where the pointer is over the picture, for the line to it from a measurement's start
+canvas.addEventListener('pointermove', e => { pointer = [e.offsetX, e.offsetY]; if (measuring && started) overlaid() })
+canvas.addEventListener('pointerleave', () => { pointer = null; overlaid() })
 // The eye moves towards the point under the pointer at the turning point's depth, and
 // the turning point with it: zooming in arrives where the pointer is.
 canvas.addEventListener('wheel', e => {
@@ -1137,7 +1338,7 @@ canvas.addEventListener('wheel', e => {
   moving(); changed()
 }, { passive: false })
 addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return
+  if (e.metaKey || e.ctrlKey || e.altKey || e.target instanceof HTMLInputElement) return
   if (e.key == 'f' && scene) fit()
   if (e.key == 'Escape') deselect()
 })

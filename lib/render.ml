@@ -13,6 +13,21 @@
      made it, and a light grey where that has none.
    - Edges: the extraction's curves, dark where seen and faint where hidden. *)
 
+
+(* A cut: a plane, by its normal [n] and how far along it [off]. What is beyond it (where
+   n . x > off) is left out of a picture, so that what is inside shows.
+
+   The stretch of the ray from [o] along [d] that the cut leaves of from..until, and
+   whether the ray comes into it through the plane: there, if it is inside the solid, what
+   it meets is the cut itself. *)
+let kept (n, off) o d (from, until) =
+  let dot a b = (a.(0) *. b.(0)) +. (a.(1) *. b.(1)) +. (a.(2) *. b.(2)) in
+  let s = dot n o -. off and rate = dot n d in
+  if rate < 0. then (let through = s /. -.rate in if through > from then (through, until, true) else (from, until, false))
+  else if rate > 0. then (from, Float.min until (-.s /. rate), false)
+  else if s > 0. then (from, from, false)
+  else (from, until, false)
+
 (* A ray marched to the model's surface: from [from] to [until] along it, [value] the
    field at a distance along the ray, [step] how far a value lets the ray go on. The
    distance of the first surface, if it meets one.

@@ -208,11 +208,13 @@ let regions name view most =
   Json.Obj
     [ ("operations", int r.total);
       ("shaders", Json.Arr (Array.to_list (Array.map (fun ((made : Region.program), text) -> Json.Obj [ ("text", Json.Str text); ("operations", int (Array.length made.steps)) ]) r.shaders)));
-      ("regions", Json.Arr (List.concat_map (fun (g : Region.region) -> List.map num (Array.to_list g.lo @ Array.to_list g.hi) @ [ int g.shader ]) (Array.to_list r.regions))) ]
+      ("regions", Json.Arr (List.concat_map (fun (g : Region.region) -> List.map num (Array.to_list g.lo @ Array.to_list g.hi) @ [ int g.shader ]) (Array.to_list r.regions)));
+      (* the cells inside the solid, six numbers each: where a cut shows the solid cut open *)
+      ("solid", Json.Arr (List.concat_map (fun (lo, hi) -> List.map num (Array.to_list lo @ Array.to_list hi)) (Array.to_list r.solid))) ]
 
 (* What the ray from o along d hits: sphere tracing inside the model's box, as the
    shader does, then the full evaluation at the point reached. *)
-let pick name view o d =
+let pick ?cut name view o d =
   let m, graph = shown name view in
   let p = Prog.compile graph in
   let c = Prog.ctx p and whole = Prog.whole p in
@@ -224,11 +226,24 @@ let pick name view o d =
   done;
   let diag = sqrt (Array.fold_left ( +. ) 0. (Array.map2 (fun l h -> (h -. l) *. (h -. l)) m.lo m.hi)) in
   let at t = Array.mapi (fun a v -> v +. (t *. d.(a))) o in
-  (* as the pictures are marched (Render.marched): to a surface, past a skin *)
-  let found () = Option.map at (Render.marched ~most:4000 ~eps:(1e-6 *. diag) ~step:(1. /. graph.lip) ~from:!tn ~until:!tf (fun t -> Prog.value p c whole (at t))) in
-  match if !tn >= !tf then None else found () with
+  let value t = Prog.value p c whole (at t) in
+  (* with the picture cut (Render.kept), only where the model is kept *)
+  let from, until, through = match cut with Some plane -> Render.kept plane o d (!tn, !tf) | None -> (!tn, !tf, false) in
+  (* as the pictures are marched (Render.marched): to a surface, past a skin; or the
+     cut itself, where the ray comes through it into the solid *)
+  let found () =
+    if through && value from < 0. then Some (from, true)
+    else Option.map (fun t -> (t, false)) (Render.marched ~most:4000 ~eps:(1e-6 *. diag) ~step:(1. /. graph.lip) ~from ~until value)
+  in
+  match if from >= until then None else found () with
   | None -> Json.Obj [ ("hit", Json.Bool false) ]
-  | Some x ->
+  | Some (t, on_cut) ->
+      let x = at t in
       let s = Prog.eval p c whole x in
       let made = match List.find_opt (fun (f : Graph.feature) -> f.fid = s.feature) m.built.features with Some f -> feature f | None -> Json.Null in
-      Json.Obj [ ("hit", Json.Bool true); ("at", vec x); ("face", Json.Str (Prog.face_name p s.face)); ("face_id", int s.face); ("feature", made); ("value", num s.d.v) ]
+      (* which way the surface faces there: out of the solid, or on the cut, out of what is kept *)
+      let normal = match cut with Some (n, _) when on_cut -> n | _ -> s.d.g in
+      let long = sqrt ((normal.(0) *. normal.(0)) +. (normal.(1) *. normal.(1)) +. (normal.(2) *. normal.(2))) in
+      Json.Obj
+        [ ("hit", Json.Bool true); ("at", vec x); ("normal", vec (Array.map (fun v -> if long > 0. then v /. long else 0.) normal));
+          ("face", Json.Str (if on_cut then "the cut" else Prog.face_name p s.face)); ("face_id", int (if on_cut then -1 else s.face)); ("cut", Json.Bool on_cut); ("feature", made); ("value", num s.d.v) ]

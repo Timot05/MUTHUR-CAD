@@ -17,7 +17,11 @@
    box, the cell that costs most is cut in eight, again and again; the cells that hold
    no surface are dropped, for a ray passes them without evaluating anything. What a
    cell costs is its program's length times the area it shows. Regions whose programs
-   come out the same share one. *)
+   come out the same share one.
+
+   Of the cells dropped, those inside the solid are kept as boxes and nothing more
+   ([solid]): where a picture is cut by a plane (Render.kept), the solid cut open is the
+   plane inside a region whose field is below zero there, or inside one of these. *)
 module P = Prog
 
 (* ---- A program under a cell's decisions ---- *)
@@ -95,6 +99,7 @@ type region = { lo : float array; hi : float array; shader : int  (** which of t
 
 type t = {
   regions : region array;
+  solid : (float array * float array) array;  (** the cells that hold no surface and are inside the solid: each from, to *)
   shaders : (program * string) array;  (** each program, and it as text *)
   total : int;  (** the operations of the whole model, written the same way: what a region's are measured against *)
 }
@@ -108,9 +113,14 @@ type cell = { at : float array; size : float; level : int; state : Bytes.t; made
 let cut ?(most = 256) ?(depth = 6) (p : P.t) c ~lo ~hi =
   let side = Array.fold_left Float.max 0. (Array.map2 ( -. ) hi lo) in
   let top at size = Array.mapi (fun a v -> Float.min hi.(a) (v +. size)) at in
+  let solid = ref [] in
   let cell at size level parent =
     let state, _, surface = Octree.prune p c parent (Array.map (fun v -> v +. (0.5 *. size)) at) ((0.5 *. sqrt 3. *. size) +. (1e-3 *. side)) in
-    if not surface then None
+    if not surface then begin
+      (* all of one side: of the solid if its middle, just evaluated, is *)
+      if c.v.(p.last.(p.root)) < 0. then solid := (at, top at size) :: !solid;
+      None
+    end
     else
       let made = program p state in
       (* the area it shows: its two longer sides *)
@@ -144,4 +154,4 @@ let cut ?(most = 256) ?(depth = 6) (p : P.t) c ~lo ~hi =
         { lo = k.at; hi = top k.at k.size; shader })
       cells
   in
-  { regions = Array.of_list regions; shaders = Array.of_list (List.rev !shaders); total = Array.length (program p whole).steps }
+  { regions = Array.of_list regions; solid = Array.of_list (List.rev !solid); shaders = Array.of_list (List.rev !shaders); total = Array.length (program p whole).steps }

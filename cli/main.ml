@@ -56,7 +56,8 @@
    others; refresh [<project> ...] builds projects again and each of their open models;
    scene <model> [<feature>] prints how a model is drawn; regions <model> <feature>
    <most> prints it cut into regions, a shader each; pick <model> <feature> ox oy oz dx
-   dy dz prints what a ray hits.
+   dy dz [nx ny nz off] prints what a ray hits, in the picture as that plane cuts it if
+   one is given.
 
    A model is a function that builds a solid on its own: <project>.<file>.<function>, or
    <project>.<file> for a file's graph or its only function (cli/project.ml); or one of
@@ -285,7 +286,8 @@ let () =
     | "pick" :: name :: solo :: ray -> (
         match List.map float_of_string ray with
         | [ ox; oy; oz; dx; dy; dz ] -> print_endline (Json.to_string (Scene.pick name (Scene.view_of solo) [| ox; oy; oz |] [| dx; dy; dz |]))
-        | _ -> failwith "pick <model> <feature> ox oy oz dx dy dz")
+        | [ ox; oy; oz; dx; dy; dz; nx; ny; nz; off ] -> print_endline (Json.to_string (Scene.pick ~cut:([| nx; ny; nz |], off) name (Scene.view_of solo) [| ox; oy; oz |] [| dx; dy; dz |]))
+        | _ -> failwith "pick <model> <feature> ox oy oz dx dy dz [nx ny nz off]")
     | [ "new"; project; file ] ->
         let path = Project.create project file in
         Printf.printf "%s made: its graph is a block to start from. See it with: mk52 view %s.%s\n" path project file
