@@ -109,10 +109,22 @@ let show name =
   browse port;
   Printf.printf "%s is open in the page, http://localhost:%d/\n" m.name port
 
+(* A project that is no longer in the folder is no longer in the page: its list of
+   functions goes, and with it its open models and what was kept of them. A project that
+   was here is known by the list it left. *)
+let forget_gone () =
+  let dir = Filename.concat Place.made "open" and here = Place.projects () in
+  let files d = if Place.is_dir d then Array.to_list (Sys.readdir d) else [] in
+  let gone = List.filter_map (fun f -> if Filename.check_suffix f ".functions" && not (List.mem (Filename.chop_suffix f ".functions") here) then Some (Filename.chop_suffix f ".functions" ^ ".") else None) (files dir) in
+  List.iter
+    (fun d -> List.iter (fun f -> if List.exists (fun project -> String.starts_with ~prefix:project f) gone then Sys.remove (Filename.concat d f)) (files d))
+    [ dir; Filename.concat Place.made "state" ]
+
 (* A project built again, for the page: its functions listed, and each of its open models
    as its code now makes it. With no project named, every project. What does not build
    is said, and the rest is still done. *)
 let refresh projects =
+  forget_gone ();
   let open_ = Place.opened () and failed = ref false in
   let attempt what f = try f () with Failure why -> failed := true; Printf.printf "%s\n" (if String.starts_with ~prefix:what why then why else what ^ ": " ^ why) in
   List.iter
