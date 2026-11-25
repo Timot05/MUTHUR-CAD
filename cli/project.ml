@@ -148,7 +148,7 @@ let model name : Emit.t =
       if not (List.mem name Models.Sets.names) then failwith (Printf.sprintf "there is no model called %s (mk52 models lists them)" name);
       let lo, hi, build = Models.Sets.find name in
       let graph = build () in
-      { name; lo; hi; built = { graph; features = !Graph.features; sketches = List.rev !Sketch.drawn } }
+      { name; lo; hi; built = Emit.built graph }
 
 (* ---- Edges and corners ---- *)
 

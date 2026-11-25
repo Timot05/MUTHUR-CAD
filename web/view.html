@@ -59,7 +59,7 @@
   /* ---- Under the lists: what is being built, what went wrong, how large the model is ---- */
   #status { flex: none; padding: 9px 14px; color: var(--soft); font-variant-numeric: tabular-nums; }
   #status:empty { display: none; }
-  #said { max-height: 170px; margin: 0; overflow: auto; color: var(--bad); white-space: pre-wrap; font: 12px/1.35 ui-monospace, monospace; user-select: text; }
+  #said, #status .bad { max-height: 170px; margin: 0; overflow: auto; color: var(--bad); white-space: pre-wrap; font: 12px/1.35 ui-monospace, monospace; user-select: text; }
 
   /* ---- Over the picture ---- */
   #viewbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); gap: 2px; padding: 3px; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 10px rgba(0, 0, 0, .10); }
@@ -93,6 +93,7 @@
     <button id="showEdges" aria-pressed="true" title="The model's edges and corners, once they are found">Edges</button>
     <button id="showSketches" aria-pressed="true" title="The outlines of its sketches">Sketches</button>
     <button id="showFrames" aria-pressed="true" title="The frames its features sit in">Frames</button>
+    <button id="showAssets" aria-pressed="true" title="What the model shows from outside, each where its code puts it: STEP files and meshes. They are seen only: nothing is cut by them, and a click goes through them.">Assets</button>
     <button id="faces" aria-pressed="true" title="Each face in a colour of its own, and what is picked out shown. Off: the object alone, in one colour. Drawn by regions, a picture then asks nothing of the model's one large shader.">Faces</button>
     <hr>
     <button id="extract" title="Find the model's edges and corners (mk52 extract) and draw them">Find edges</button>
@@ -121,7 +122,7 @@ const canvas = document.querySelector('canvas')
 // shown alone (0: the whole model), and the last point clicked.
 let projects = [], opened = [], current = null, scene = null, edges = null
 let feature = 0, face = -1, solo = 0, picked = null
-const show = { edges: true, sketches: true, frames: true }
+const show = { edges: true, sketches: true, frames: true, assets: true }
 let said = '', building = false, asking = 0, took = null
 // what was last seen of the folder: the model in front as the command wrote it, and the
 // note of which model to bring to the front
@@ -376,6 +377,24 @@ fn placed(p: vec3f) -> vec4f { return u.project * vec4f(p + normalize(u.eye.xyz 
 }
 `
 
+// What a model shows from outside (lib/asset.ml): triangles, each instance of a mesh
+// put where its frame is. Drawn after the model, by depth: either hides the other. One
+// colour for all of them, a sand that no face of a model has.
+const placing = `
+struct Placed { @builtin(position) position: vec4f, @location(0) world: vec3f, @location(1) normal: vec3f }
+@vertex fn asset_vertex(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) x: vec3f, @location(3) y: vec3f, @location(4) z: vec3f, @location(5) o: vec3f) -> Placed {
+  let world = o + x * p.x + y * p.y + z * p.z;
+  return Placed(u.project * vec4f(world, 1.0), world, x * n.x + y * n.y + z * n.z);
+}
+@fragment fn asset_fragment(in: Placed) -> @location(0) vec4f {
+  let rd = normalize(in.world - u.eye.xyz);
+  var n = normalize(in.normal);
+  if (dot(n, rd) > 0.0) { n = -n; }
+  let light = 0.38 + 0.62 * max(dot(n, normalize(-rd + 0.45 * u.up.xyz - 0.3 * u.right.xyz)), 0.0);
+  return vec4f(vec3f(0.84, 0.79, 0.68) * light, 1.0);
+}
+`
+
 // ---- Drawing ----
 
 let device, context, format, bound, layout, uniforms, coarse, depth, model = null, timer = null
@@ -403,6 +422,10 @@ let nothing
 const plainly = buffer => plainly[buffer == uniforms] ??= device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer } }, { binding: 1, resource: nothing }] })
 // what is added to what is there, as numbers
 const added = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } }
+// the assets' pipeline, and each mesh the page has been given, by its number: its
+// vertices and corners on the graphics card. A mesh is asked for once.
+let mounted
+const meshes = new Map()
 // what is drawn over the model, a line or a dot an instance: [pipeline hidden, pipeline in front], its buffer, how many
 const lines = { floats: 11, buffer: null, count: 0 }, dots = { floats: 8, buffer: null, count: 0 }
 
@@ -445,6 +468,12 @@ async function graphics() {
       depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare },
     })
   })
+  const assets = device.createShaderModule({ code: shared + placing })
+  const threes = (first, count, stepMode) => ({ stepMode, arrayStride: 12 * count, attributes: Array.from({ length: count }, (_, i) => ({ shaderLocation: first + i, offset: 12 * i, format: 'float32x3' })) })
+  mounted = device.createRenderPipeline({
+    layout, vertex: { module: assets, entryPoint: 'asset_vertex', buffers: [threes(0, 2, 'vertex'), threes(2, 4, 'instance')] }, fragment: { module: assets, entryPoint: 'asset_fragment', targets: [{ format }] },
+    depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
+  })
   lines.pipelines = pipelines('line', [3, 3, 4, 1])
   dots.pipelines = pipelines('dot', [3, 4, 1])
   // how long the graphics card takes over a picture, where it will say
@@ -466,7 +495,32 @@ function sized() {
 
 // A model as the page holds it: what each way of drawing needs of it, made when that
 // way is first asked for.
-const held = (s, name, alone) => ({ name, alone, source: s.shader, gates: s.gates, compiled: null, regions: null })
+const held = (s, name, alone) => ({ name, alone, source: s.shader, gates: s.gates, compiled: null, regions: null, assets: [] })
+
+// A mesh by its number, asked of the server the first time: six numbers a vertex (its
+// point, its normal), then the triangles' corners (lib/asset.ml).
+const meshed = id => {
+  if (!meshes.has(id)) meshes.set(id, (async () => {
+    const answer = await fetch('/asset?id=' + id)
+    if (!answer.ok) throw new Error(answer.status == 404 ? 'The page is served by an older mk52 than it is: mk52 stop, then mk52 open, in the design folder.' : await answer.text())
+    const data = await answer.arrayBuffer(), [vertices, corners] = new Uint32Array(data, 0, 2)
+    const kept = (usage, from, bytes) => { const b = device.createBuffer({ size: Math.max(4, bytes), usage: usage | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, data, from, bytes); return b }
+    return { vertices: kept(GPUBufferUsage.VERTEX, 8, 24 * vertices), corners: kept(GPUBufferUsage.INDEX, 8 + 24 * vertices, 4 * corners), count: corners }
+  })())
+  return meshes.get(id)
+}
+
+// What a model shows from outside, ready to draw: for each mesh, where every instance of
+// it is, twelve numbers each (the frame's three axes, then its origin).
+async function assembled(m, assets) {
+  const by = new Map()
+  for (const a of assets) if (a.mesh) by.set(a.mesh, [...(by.get(a.mesh) ?? []), ...a.x, ...a.y, ...a.z, ...a.o])
+  m.assets = await Promise.all([...by].map(async ([id, frames]) => {
+    const instances = device.createBuffer({ size: 4 * frames.length, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })
+    device.queue.writeBuffer(instances, 0, new Float32Array(frames))
+    return { mesh: await meshed(id), instances, count: frames.length / 12 }
+  }))
+}
 
 // For drawing by regions: the kernel's cut of the model (lib/region.ml), each shader of
 // it compiled, and the boxes on the graphics card, six numbers each, sorted by shader so
@@ -555,7 +609,7 @@ function given(c, buffer) {
   return c.binds[(buffer == uniforms) + ' ' + gated] ??= device.createBindGroup({ layout: bound, entries: [{ binding: 0, resource: { buffer } }, { binding: 1, resource: (gated ? c.texture : c.open).createView() }] })
 }
 
-function dropped(m) { if (m) m.gone = true; m?.regions?.buffer.destroy(); m?.compiled?.texture.destroy(); m?.compiled?.open?.destroy() }
+function dropped(m) { if (m) m.gone = true; m?.assets.forEach(a => a.instances.destroy()); m?.regions?.buffer.destroy(); m?.compiled?.texture.destroy(); m?.compiled?.open?.destroy() }
 
 // The uniforms for a picture w by h of the model in front.
 function uniformed(w, h, back) {
@@ -854,6 +908,11 @@ function draw() {
     else if (r) { pass.setBindGroup(0, faces ? given(c, uniforms) : plainly(uniforms)); pass.setBindGroup(1, found.read); pass.setPipeline(faces ? c.faced : unfaced); pass.draw(3) }
     else { pass.setBindGroup(0, given(c, uniforms)); pass.setPipeline(counting ? c.counted.heat : c.pipeline); pass.draw(3) }
     pass.setBindGroup(0, plainly(uniforms))
+    if (show.assets && !counting) for (const a of model.assets) {
+      pass.setPipeline(mounted)
+      pass.setVertexBuffer(0, a.mesh.vertices); pass.setVertexBuffer(1, a.instances); pass.setIndexBuffer(a.mesh.corners, 'uint32')
+      pass.drawIndexed(a.mesh.count, a.count)
+    }
     for (const hidden of [0, 1]) for (const kind of [lines, dots]) if (kind.count) {
       pass.setPipeline(kind.pipelines[hidden])
       pass.setVertexBuffer(0, kind.buffer)
@@ -973,7 +1032,7 @@ async function take(name, alone) {
     const s = await r.json()
     const found = await (await fetch('/edges' + about(name))).json()
     const ready = held(s, name, alone)
-    await readied(ready)
+    await Promise.all([readied(ready), assembled(ready, s.assets)])
     // a later one was asked for meanwhile, or the person moved on
     if (mine != taking || current != name || solo != alone) { dropped(ready); return }
     dropped(model)
@@ -1094,6 +1153,8 @@ function status() {
     said && el('pre', { id: 'said' }, said),
     !said && scene && el('div', {}, `${scene.nodes} nodes, ${scene.selects} selects` + (took == null ? '' : ` · ${ms(took)} a ${map ? 'map' : 'picture'}${cut() ? `, ${cut().count} regions` : (gated ? ', compiled' : ', compiled, gates off') + (regional ? ', while its regions are made ready' : '')}`)),
     // what the picture cost, as the map's shader counted it, and how fast that went by the picture's own time
+    // an asset whose file could not be read
+    ...(said || !scene ? [] : scene.assets.filter(a => a.said).map(a => el('pre', { className: 'bad' }, a.said))),
     !said && scene && map && (tally
       ? el('div', {}, `${tally.cost < 0.1 ? tally.cost.toFixed(3) : tally.cost.toFixed(1)} whole evaluations a pixel: ${tally.steps.toFixed(1)} steps × ${(100 * tally.share).toFixed(tally.share < 0.1 ? 1 : 0)}% of the model.` + (tally.needed == null ? '' : ` Its logic needs ${(100 * tally.needed).toFixed(0)}%.`),
           el('br'), `${Math.round(tally.operations / 1e6).toLocaleString('en')} M operations a picture` + (plain[tally.which] ? `: ${Math.round(tally.operations / 1e6 / plain[tally.which])} M a ms, by its ${ms(plain[tally.which])}.` : '.'))
@@ -1102,7 +1163,7 @@ function status() {
 }
 
 for (const section of document.querySelectorAll('.panel')) section.querySelector('.head').onclick = e => e.currentTarget.setAttribute('aria-expanded', section.classList.toggle('open'))
-for (const what of ['edges', 'sketches', 'frames']) {
+for (const what of ['edges', 'sketches', 'frames', 'assets']) {
   const button = $('show' + what[0].toUpperCase() + what.slice(1))
   button.onclick = () => { show[what] = !show[what]; button.setAttribute('aria-pressed', show[what]); lay() }
 }

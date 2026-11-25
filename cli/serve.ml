@@ -14,6 +14,7 @@
      GET  /gates?name=&solo=         where its shader's gates are entered: the table
      GET  /regions?name=&solo=&most= the model cut into at most so many regions, a shader
                                      each (mk52 regions)
+     GET  /asset?id=                 something a model shows from outside, as triangles
      GET  /edges?name=               its edges and corners, or null
      GET  /pick?name=&solo=&ray=     what a ray hits (mk52 pick): ox,oy,oz,dx,dy,dz
      POST /view /close /extract ?name=   the command of that name, for the person
@@ -155,6 +156,10 @@ let answer port r =
   | "GET", "/regions" ->
       let most = match int_of_string_opt (param "most") with Some n when n >= 1 && n <= 4096 -> n | _ -> refuse "400 Bad Request" "most is a number of regions" in
       asked [ "regions"; name (); string_of_int (solo ()); string_of_int most ]
+  | "GET", "/asset" ->
+      let id = param "id" in
+      if id = "" || not (String.for_all (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false) id) then refuse "400 Bad Request" "not an asset's number";
+      ("application/octet-stream", file (Place.asset id))
   | "GET", "/edges" -> (json, try read (Place.edges (name ())) with Sys_error _ -> "null")
   | "GET", "/pick" ->
       let ray = String.split_on_char ',' (param "ray") in

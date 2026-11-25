@@ -44,6 +44,7 @@ A model is a function that takes `()` and returns a solid: `<project>.<file>.<fu
 - **The camera:** dragging turns the view about a point, shift-drag or right-drag slides it, the wheel moves the eye towards what is under the pointer. F fits the model; Escape clears what is picked out.
 - **Under the lists:** how large the model is and how long the graphics card took over the last picture, where the browser will say.
 - **Regions** draws the model another way (off until it is switched on, or the page's address ends in `?regions`): cut into some 500 boxes, each drawn by a short shader of its own that holds only what matters inside it; the one compiled shader then gives each pixel its face. It is five times faster on one of the two large models it was tried on and twice as fast on the other, and takes seconds longer to be ready, during which the one compiled shader draws alone. See "Regions, built" below.
+- **Assets:** what a model shows from outside, a STEP file or an STL mesh, drawn with the model where its code puts it, each hiding the other by depth. A model says `Asset.show ~frame "../parts/switch.step"`, in a frame like a feature, the path from the design folder. A STEP file is cut into triangles the first time it is shown (1.3 s for a key switch of 1.3 MB, 76,000 triangles) and kept in `_mk52/assets/` until the file changes. An asset is seen only: it is no part of the model's field, so nothing cuts it or is cut by it, a click goes through it, and `mk52 picture` does not draw it.
 - **Faces** off draws the object alone, in one colour: no face has a colour of its own and nothing picked out is shown. Drawn by regions, a picture then asks nothing of the one compiled shader, which saves about half a millisecond of the synth's 4.5 (3.7 to 4.3 ms against 4.5 to 5.0; 5.4 to 5.8 against 5.9 to 6.5 on the other model). Drawn by the one compiled shader it changes the colours and not the time. Regions and Faces are kept as they were left, in the browser's own store for the page.
 - **Where the work goes:** Gates switches the shader's skipping off, so the time it saves can be read. Cost, Steps and Share draw a map in place of the picture, from a second shader that counts its work (with Regions, from each region's shader, added up over the regions a pixel's ray crosses). Cost is what a pixel's ray ran, in whole evaluations of the model (every operation of the model run once is 1), on a fixed scale of tens, blue under 1 and red over it. It is Steps (how often the ray evaluated the model) times Share (how much of the model an evaluation ran). The picture's totals are under the lists.
 
@@ -155,6 +156,7 @@ Each part has one job. The command (`cli/`, OCaml) builds, measures and draws pi
 | `open/<model>.model` | the command | a model as last built; it is open in the page for as long as this file is there |
 | `open/<model>.edges.json` | the command | its edges and corners, if extracted |
 | `open/<model>.<feature>.gates` | the command | where its shader's gates are entered |
+| `assets/<number>.mesh` | the command | what a model shows from outside, as triangles: one a file, by a number made of its path |
 | `front` | the command | the model the page is to bring to the front |
 | `state/<model>.json` | the server, from the page | what is picked out in it and where the camera is, for an agent |
 | `server` | the server | its process and its port (8752, or the next one free) |
@@ -174,6 +176,8 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `lib/extract.ml` | 674 | edges and corners: seed, walk, cut, assemble, flag |
 | `lib/surface.ml` | 697 | a triangle mesh of the surface, attached to its creases and corners |
 | `lib/shader.ml` | 240 | the compiled program as a WGSL function, its chains in gates, and the table of where each gate is entered |
+| `lib/step.ml`, `mesh.ml` | 804 | a STEP file read (planes, cylinders, cones, spheres, tori, NURBS; assemblies), and its faces cut into triangles: mk49's, as they were |
+| `lib/asset.ml` | 117 | something made elsewhere shown with a model: where a model's code puts it, and its triangles from a STEP or an STL file |
 | `lib/region.ml` | 147 | the model cut into regions, and each region's own short program (the field alone) as a WGSL function |
 | `lib/render.ml`, `png.ml` | 207 | a picture made by the kernel, as a PNG |
 | `lib/emit.ml`, `place.ml`, `json.ml` | 215 | a model as a file; where things are kept; JSON |
@@ -187,7 +191,8 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 
 ## Not there
 
-- **Nothing of STEP files:** no reference, no deviation, no check against faces, no fitting. That stays in `pointer_mk49`.
+- **A STEP file is shown, not compared with:** no reference, no deviation, no check against faces, no fitting. That stays in `pointer_mk49`.
+- **An asset is not in the kernel's own pictures, cannot be clicked, and is not checked against the model.** Whether one runs into the model has to be seen.
 - **The mesh is not drawn in the page.** `mk52 mesh` writes the STL file and a picture.
 - **A native app.** The first mk52 had one, in Swift with Metal. WebGPU drew the same shader as fast (a synth's assembly of 4,912 nodes at 2200 x 1800 on an M1 Max: 14.7, 41.3 and 85.9 ms with the whole model in view, filling the view and close up, against 14.8, 42.3 and 86.1 ms natively), and a page can be driven and checked by an agent, which a native window cannot.
 - **Frame times are measured on that one model only,** in a test page that drew pictures one straight after another. The page's own figure for a single picture after a pause has read higher (23 ms for the first of those three views); why is not yet known.

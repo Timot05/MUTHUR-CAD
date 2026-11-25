@@ -311,6 +311,38 @@ let regions name most =
     (!wrong = 0 && !outside = 0 && Array.length r.regions > 0)
     (Printf.sprintf "the field differs at %d points of the regions, by %g at most; %d points near the surface are in no region" !wrong !furthest !outside)
 
+(* ---- What a model shows from outside ---- *)
+
+(* An STL file is read the same in its two forms: one triangle, its three corners and
+   its normal, the file's own or, where the file gives none, the triangle's. And an
+   asset shown inside a frame is put in that frame, with the one it is given in. *)
+let assets () =
+  let corners = [ (0., 0., 0.); (2., 0., 0.); (0., 3., 0.) ] in
+  let file name text = let path = Filename.temp_file name ".stl" in Out_channel.with_open_bin path (fun oc -> output_string oc text); path in
+  let ascii normal =
+    Printf.sprintf "solid one\n facet normal %s\n  outer loop\n%s  endloop\n endfacet\nendsolid one\n" normal (String.concat "" (List.map (fun (x, y, z) -> Printf.sprintf "   vertex %g %g %g\n" x y z) corners))
+  in
+  let binary =
+    let b = Buffer.create 134 in
+    Buffer.add_string b (String.make 80 ' ');
+    Buffer.add_int32_le b 1l;
+    List.iter (fun v -> Buffer.add_int32_le b (Int32.bits_of_float v)) ([ 0.; 0.; 1. ] @ List.concat_map (fun (x, y, z) -> [ x; y; z ]) corners);
+    Buffer.add_string b "\000\000";
+    Buffer.contents b
+  in
+  let right (m : Asset.mesh) = m.points = [| 0.; 0.; 0.; 2.; 0.; 0.; 0.; 3.; 0. |] && m.triangles = [| 0; 1; 2 |] && Array.for_all2 (fun a b -> Float.abs (a -. b) < 1e-6) m.normals [| 0.; 0.; 1.; 0.; 0.; 1.; 0.; 0.; 1. |] in
+  List.iter
+    (fun (name, text) ->
+      let path = file name text in
+      let m = Asset.read path in
+      Sys.remove path;
+      check ("assets: an STL file, " ^ name) (right m) (Printf.sprintf "%d points, %d corners" (Array.length m.points / 3) (Array.length m.triangles)))
+    [ ("as text", ascii "0 0 1"); ("as text, no normal given", ascii "0 0 0"); ("in binary", binary) ];
+  Asset.shown := [];
+  ignore (Graph.within (Frame.translate (1., 2., 3.)) (fun () -> Asset.show ~frame:(Frame.translate (10., 0., 0.)) "there.step"; Solid.sphere "s" (0., 0., 0.) 1.));
+  check "assets: one shown in a frame is put there" (match !Asset.shown with [ a ] -> a.frame.t = [| 11.; 2.; 3. |] && a.name = "there" | _ -> false) "";
+  Asset.shown := []
+
 (* The shapes the README says are still beyond the extractor at some cell size. *)
 let hard = [ "villarceau"; "plane-through-edge"; "coplanar-boxes" ]
 
@@ -326,4 +358,5 @@ let () =
   List.iter (fun (name, least) -> gates name least) [ ("bracket", 240); ("bracket", 40); ("block", 40); ("arm", 40); ("pyramid", 40) ];
   List.iter (fun name -> List.iter (regions name) [ 1; 40; 400 ]) [ "bracket"; "block"; "arm"; "pyramid"; "cube-fillet"; "torus" ];
   chamfers ();
+  assets ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

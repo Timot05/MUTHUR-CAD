@@ -2,15 +2,18 @@
 
    Each feature of a part is a file of its own (<part>/<feature>.ml, in a design folder) with
    [let graph () = ...]. It is compiled into a small program of its own, which builds the
-   graph and writes it out ([main]): the graph, the features made on the way and the
-   sketches drawn. The command (cli/main.ml) runs that program, adds where the model is to
+   graph and writes it out ([main]): the graph, the features made on the way, the
+   sketches drawn and the assets shown. The command (cli/main.ml) runs that program, adds where the model is to
    be looked at, and writes the whole where the page finds it ([write]); what the page asks
    of the model is answered from that file ([read], cli/scene.ml).
 
    The form is OCaml's own (Marshal), which is only safe between programs built from the
    same kernel. So a file starts with the kernel's stamp, and a reader with another
    stamp refuses it. *)
-type built = { graph : Graph.t; features : Graph.feature list; sketches : Sketch.drawn list }
+type built = { graph : Graph.t; features : Graph.feature list; sketches : Sketch.drawn list; assets : Asset.placed list }
+
+(* What has been built in this program so far, around its graph. *)
+let built graph = { graph; features = !Graph.features; sketches = List.rev !Sketch.drawn; assets = List.rev !Asset.shown }
 
 type t = { name : string; lo : float array; hi : float array; built : built }
 
@@ -18,7 +21,7 @@ type t = { name : string; lo : float array; hi : float array; built : built }
 let main build =
   let graph = build () in
   set_binary_mode_out stdout true;
-  Marshal.to_channel stdout { graph; features = !Graph.features; sketches = List.rev !Sketch.drawn } []
+  Marshal.to_channel stdout (built graph) []
 
 let built_of ic : built = Marshal.from_channel ic
 

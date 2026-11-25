@@ -12,6 +12,8 @@
      _mk52/open/<model>.edges.json    its edges, if it was extracted
      _mk52/open/<model>.<f>.gates     where its shader's gates are entered, with feature
                                       f shown alone (0: the whole model)
+     _mk52/assets/<file>.mesh         what a model shows from outside (Asset), as triangles:
+                                      one a file, by a number made of its path
      _mk52/front                      the model the page is to bring to the front
      _mk52/state/<model>.json         what the page shows of it and has selected in it
      _mk52/server                     the server running here, if one is: its process
@@ -47,6 +49,7 @@ let functions project = under "open" (project ^ ".functions")
 let model name = under "open" (name ^ ".model")
 let edges name = under "open" (name ^ ".edges.json")
 let gates name feature = under "open" (Printf.sprintf "%s.%d.gates" name feature)
+let asset id = under "assets" (id ^ ".mesh")
 let state name = under "state" (name ^ ".json")
 let picture name = under "pictures" (name ^ ".png")
 let surface name = under "meshes" (name ^ ".stl")

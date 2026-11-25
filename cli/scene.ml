@@ -69,6 +69,29 @@ let sketch (d : Sketch.drawn) =
   let span (s : Sketch.span) = Json.Obj [ ("name", Json.Str s.name); ("points", Json.Arr (List.map world (Sketch.points s))) ] in
   Json.Obj [ ("feature", int d.feature); ("turned", Json.Bool d.turned); ("loops", Json.Arr (List.map (fun l -> Json.Arr (Array.to_list (Array.map span l))) d.loops)) ]
 
+(* What a model shows from outside (Asset), for the page: its name, where it is as a
+   feature's frame is given, and its triangles as a file the page asks the server for,
+   named by a number made of its path. The file is made the first time, and again when
+   the asset's own file or the kernel has changed: a large STEP file takes seconds. One
+   that cannot be read is told with why, and the rest are shown. *)
+let asset (a : Asset.placed) =
+  let frame = [ ("o", vec a.frame.t); ("x", vec (Frame.direction a.frame [| 1.; 0.; 0. |])); ("y", vec (Frame.direction a.frame [| 0.; 1.; 0. |])); ("z", vec (Frame.direction a.frame [| 0.; 0.; 1. |])) ] in
+  let id = Digest.to_hex (Digest.string a.path) in
+  let made () =
+    let st = try Unix.stat a.path with Unix.Unix_error _ -> failwith "there is no such file (an asset's path is from the design folder)" in
+    let stamp = Printf.sprintf "%f %d %s" st.st_mtime st.st_size (Place.kernel ()) and kept = Place.asset id in
+    if (try In_channel.with_open_bin (kept ^ ".of") In_channel.input_all <> stamp with Sys_error _ -> true) || not (Sys.file_exists kept) then begin
+      let mesh = Asset.written (Asset.read a.path) in
+      (* written whole, then put in place: two commands may be at it at once *)
+      let tmp = Printf.sprintf "%s.%d" kept (Unix.getpid ()) in
+      Out_channel.with_open_bin tmp (fun oc -> output_string oc mesh);
+      Sys.rename tmp kept;
+      Out_channel.with_open_bin (kept ^ ".of") (fun oc -> output_string oc stamp)
+    end
+  in
+  let mesh = try made (); [ ("mesh", Json.Str id) ] with Failure why | Sys_error why -> [ ("said", Json.Str (Printf.sprintf "%s: %s" a.path why)) ] in
+  Json.Obj ([ ("name", Json.Str a.name); ("feature", int a.feature) ] @ frame @ mesh)
+
 (* How the page draws the model: its box, its features and its sketches, and the model
    itself as a shader of its own, with where that shader's gates are entered (Shader): a
    file of 32-bit words, little-endian, which the page asks the server for. *)
@@ -84,6 +107,7 @@ let scene name solo =
       ("root", Json.Str (Sys.getcwd ()));
       ("features", Json.Arr (List.map (fun f -> feature ~faces:(faces f) f) (features_of m)));
       ("sketches", Json.Arr (List.map sketch m.built.sketches));
+      ("assets", Json.Arr (List.map asset m.built.assets));
       ("shader", Json.Str s.text);
       ("gates", Json.Obj [ ("lo", vec g.lo); ("cell", num g.cell); ("cells", Json.Arr (Array.to_list (Array.map int g.cells))); ("width", int Shader.width) ]) ]
 
