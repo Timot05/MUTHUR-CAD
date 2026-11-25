@@ -2,9 +2,9 @@
    mk52 init), or anywhere below it:
 
      mk52 init                       make this folder a design folder
-     mk52 open                       open the page here, in the browser: it lists the
-                                     projects' functions and shows each one opened; a
-                                     project is built again whenever its code is saved
+     mk52 open                       open the page here, in the browser: it shows each
+                                     model opened with mk52 view; a project is built
+                                     again whenever its code is saved
      mk52 view <model>               build a model and show it in the page, in front;
                                      "open <model>" is the same
      mk52 models                     the projects here and their functions; mk52 models

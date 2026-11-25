@@ -8,8 +8,8 @@
    saved is built again (mk52 refresh), and the page sees the models change.
 
      GET  /                          the page
-     GET  /look                      what is open, each project's functions, the model to
-                                     bring to the front, and what the last build said
+     GET  /look                      what is open, the model to bring to the front, and
+                                     what the last build said
      GET  /scene?name=&solo=&hide=   how a model is drawn (mk52 scene), with the
                                      features in hide (5,8) taken out
      GET  /gates?name=&solo=         where its shader's gates are entered: the table
@@ -18,7 +18,7 @@
      GET  /asset?id=                 something a model shows from outside, as triangles
      GET  /edges?name=               its edges and corners, or null
      GET  /pick?name=&solo=&ray=     what a ray hits (mk52 pick): ox,oy,oz,dx,dy,dz
-     POST /view /close /extract ?name=   the command of that name, for the person
+     POST /close /extract ?name=     the command of that name, for the person
      POST /state?name=               what the page shows of a model, kept for an agent *)
 open Mk52
 
@@ -79,21 +79,11 @@ let noted = ref 0.
 let look () =
   let now = Unix.gettimeofday () in
   if now -. !noted > 1. then (noted := now; Out_channel.with_open_bin Place.seen (fun _ -> ()));
-  let dir = Filename.concat Place.made "open" in
-  let files = if Place.is_dir dir then List.sort compare (Array.to_list (Sys.readdir dir)) else [] in
-  let projects =
-    List.filter_map
-      (fun f ->
-        if Filename.check_suffix f ".functions" then
-          Some (Json.Obj [ ("project", Json.Str (Filename.chop_suffix f ".functions")); ("functions", Json.Arr (List.filter_map (fun l -> if l = "" then None else Some (Json.Str l)) (String.split_on_char '\n' (read (Filename.concat dir f))))) ])
-        else None)
-      files
-  in
   let opened = List.map (fun name -> Json.Obj [ ("name", Json.Str name); ("written", Json.Str (stamp (Place.model name) ^ " " ^ stamp (Place.edges name))) ]) (Place.opened ()) in
   let front = try String.trim (read Place.front) with Sys_error _ -> "" in
   let building, said = Mutex.protect lock (fun () -> (!building, !said)) in
   Json.Obj
-    [ ("folder", Json.Str (Filename.basename (Sys.getcwd ()))); ("open", Json.Arr opened); ("projects", Json.Arr projects); ("front", Json.Str front); ("fronted", Json.Str (stamp Place.front));
+    [ ("folder", Json.Str (Filename.basename (Sys.getcwd ()))); ("open", Json.Arr opened); ("front", Json.Str front); ("fronted", Json.Str (stamp Place.front));
       ("building", Json.Bool building); ("said", Json.Str said) ]
 
 (* ---- HTTP, as little of it as the page needs ---- *)
@@ -174,7 +164,7 @@ let answer port r =
       let ray = String.split_on_char ',' (param "ray") in
       if List.length ray <> 6 || List.exists (fun v -> float_of_string_opt v = None) ray then refuse "400 Bad Request" "ray is ox,oy,oz,dx,dy,dz";
       asked ([ "pick"; name (); view () ] @ ray)
-  | "POST", ("/view" | "/close" | "/extract") ->
+  | "POST", ("/close" | "/extract") ->
       let ok, printed, err = run [ String.sub r.path 1 (String.length r.path - 1); name () ] in
       (json, Json.to_string (Json.Obj [ ("ok", Json.Bool ok); ("said", Json.Str (if ok then "" else String.trim (printed ^ err))) ]))
   | "POST", "/state" ->

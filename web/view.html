@@ -4,8 +4,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mk52</title>
 <!-- The page: the window on a design folder, served by cli/serve.ml (mk52 open). Beside
-     the picture, what is open, what could be opened, and the features of the model in
-     front. The picture is a ray a pixel, marched on the graphics card through the
+     the picture, the models that are open (mk52 view opens one) and the features of the
+     one in front. The picture is a ray a pixel, marched on the graphics card through the
      function the kernel wrote for the model (lib/shader.ml), with WebGPU. The page holds
      no model and does no geometry: what is drawn, and what a click hit, it asks. -->
 <style>
@@ -65,7 +65,7 @@
   .head:hover { background: var(--hover); }
   .sum { margin-left: auto; min-width: 0; font: var(--small) var(--mono); letter-spacing: 0; text-transform: none; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chev { width: 6px; height: 6px; flex: none; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); color: var(--ink-2); }
-  .open > .head .chev, .row.open > .chev { transform: translateY(-2px) rotate(45deg); }
+  .open > .head .chev { transform: translateY(-2px) rotate(45deg); }
   .body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--s1) 0 var(--s3); }
   .panel:not(.open) .body { display: none; }
   @media (prefers-reduced-motion: no-preference) { .chev { transition: transform .12s; } }
@@ -132,7 +132,6 @@
 
 <aside>
   <section class="panel open" id="open"><button class="head" aria-expanded="true"><i class="chev"></i>Open<span class="sum"></span></button><div class="body"></div></section>
-  <section class="panel open fill" id="functions"><button class="head" aria-expanded="true"><i class="chev"></i>Functions<span class="sum"></span></button><div class="body"></div></section>
   <section class="panel open fill" id="features"><button class="head" aria-expanded="true"><i class="chev"></i>Features<span class="sum"></span></button><div class="body"></div></section>
   <div id="status"></div>
 </aside>
@@ -174,19 +173,19 @@ const canvas = document.querySelector('canvas')
 
 // ---- What the page knows and shows ----
 
-// The design's projects with their functions, the models that are open, the one in front
+// The models that are open, the one in front
 // (`scene`: it as it is drawn, null until its first shader is ready), and what is picked
 // out in it: a feature (0: none), a face by the shader's number (-1: none), a feature
 // shown alone (0: the whole model), the features taken out of what is shown, and the
 // last point clicked.
-let projects = [], opened = [], current = null, scene = null, edges = null
+let opened = [], current = null, scene = null, edges = null
 let feature = 0, face = -1, solo = 0, picked = null, hidden = new Set()
 const show = { edges: true, sketches: true, frames: true, assets: true }
 let said = '', building = false, asking = 0, took = null
 // what was last seen of the folder: the model in front as the command wrote it, and the
 // note of which model to bring to the front
 let written = null, fronted = null, taking = 0
-const fitted = new Set(), shut = new Set()
+const fitted = new Set()
 
 // ---- The camera ----
 // It turns about a point (the middle of the model's box unless it has been slid
@@ -1142,7 +1141,7 @@ async function look() {
       seen = text
       folder = JSON.parse(text)
       document.title = folder.folder + ' — mk52'
-      projects = folder.projects; opened = folder.open.map(o => o.name); building = folder.building
+      opened = folder.open.map(o => o.name); building = folder.building
       if (!building) said = folder.said
       if (folder.fronted != fronted) { fronted = folder.fronted; if (opened.includes(folder.front)) front(folder.front) }
       if (!opened.includes(current)) front(opened[0] ?? null)
@@ -1276,32 +1275,7 @@ function panel() {
   $('open').querySelector('.sum').textContent = opened.length || ''
   $('open').querySelector('.body').replaceChildren(...(opened.length
     ? opened.map(name => row(name == current ? 'front' : '', () => front(name), el('span', { className: 'name', title: name }, name), el('span', { className: 'acts' }, action('Close', 'Close ' + name, false, () => command('close', name)))))
-    : [el('p', { className: 'empty' }, 'Nothing is open. Choose a function below.')]))
-
-  // each project, its files under it, and each file's functions under that; a project or a
-  // file clicked shuts or opens
-  const fold = key => () => { shut.has(key) ? shut.delete(key) : shut.add(key); panel() }
-  const files = functions => {
-    const by = new Map()
-    for (const f of functions) {
-      const file = f.slice(0, f.indexOf('.'))
-      by.has(file) ? by.get(file).push(f) : by.set(file, [f])
-    }
-    return [...by]
-  }
-  $('functions').querySelector('.body').replaceChildren(...(projects.length
-    ? projects.flatMap(({ project, functions }) => [
-        row(shut.has(project) ? '' : 'open', fold(project), el('i', { className: 'chev' }), el('span', { className: 'name' }, project), el('span', { className: 'meta' }, functions.length)),
-        ...(shut.has(project) ? [] : files(functions).flatMap(([file, fs]) => {
-          const key = project + '/' + file
-          return [
-            row(shut.has(key) ? '' : 'open', fold(key), el('i', { className: 'chev', style: 'margin-left: 15px' }), el('span', { className: 'name', title: file + '.ml' }, file + '.ml'), el('span', { className: 'meta' }, fs.length)),
-            ...(shut.has(key) ? [] : fs.map(f => {
-              const name = project + '.' + f
-              return row(opened.includes(name) ? 'front' : '', () => opened.includes(name) ? front(name) : command('view', name), el('span', { className: 'name', style: 'padding-left: 30px', title: name }, f.slice(file.length + 1)))
-            }))]
-        }))])
-    : [el('p', { className: 'empty' }, 'No project here yet: mk52 new <project> <file> makes one.')]))
+    : [el('p', { className: 'empty' }, 'Nothing is open.')]))
 
   // each feature followed by the ones made inside it, in the order the code made them;
   // clicking one picks it out (the rest of the model greys), and under it then, its faces.
@@ -1332,7 +1306,7 @@ function panel() {
   $('extract').disabled = !current
   $('fit').disabled = !scene
   $('notice').hidden = !!scene
-  if (!scene) $('notice').textContent = current ? '' : 'Open a function from the list to see it here.'
+  if (!scene) $('notice').textContent = current ? '' : 'mk52 view <model>, in the design folder, opens a model here. mk52 models lists them.'
   status()
 }
 
