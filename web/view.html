@@ -299,6 +299,7 @@ const marching = `
   // normal: one loop, so model() is written into the shader once.
   var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
   var t = tn; var hit = false; var h = vec3f(0); var n = vec3f(0); var face = -1; var feat = 0; var k = 0;
+  var touching = false; var medium = 0.0;
   for (var i = 0; i < 400; i++) {
     var q = ro + rd * t;
     if (hit) { q = h + u.depth.x * taps[k]; }
@@ -307,8 +308,19 @@ const marching = `
     if (!hit) {
       // Where the box cuts the solid the ray starts inside it, and goes on to the
       // surface from within: a cut is left open, so a cavity shows through it.
-      if (abs(d) < u.depth.x) { hit = true; h = q; face = f; feat = ft; }
-      else { t += abs(d) * u.size.w; if (t > tf) { break; } }
+      // A surface is where the field changes sign, not only where it comes to nothing:
+      // two faces on one surface leave a skin, with air on both sides (lib/render.ml,
+      // marched). So near zero the place is kept and the ray looks a little on: it has
+      // hit if it is on the other side there, and otherwise goes on from there.
+      if (touching) {
+        touching = false;
+        if (d * medium < 0.0) { hit = true; }
+        else { if (medium == 0.0) { medium = sign(d); } t += abs(d) * u.size.w; if (t > tf) { break; } }
+      } else if (abs(d) < u.depth.x) {
+        touching = true; h = q; face = f; feat = ft;
+        if (medium == 0.0) { medium = sign(d); }
+        t += 2.0 * u.depth.x;
+      } else { medium = sign(d); t += abs(d) * u.size.w; if (t > tf) { break; } }
     } else { n += taps[k] * d; k++; if (k == 4) { break; } }
   }
   if (!hit) { return seen; }
@@ -382,16 +394,30 @@ fn cross_box(in: Box) -> Crossed {
   // as the whole model is marched (marched), between the box's two sides
   var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
   var t = tn; var n = vec3f(0); var k = 0;
+  var touching = false; var medium = 0.0;
   for (var i = 0; i < 200; i++) {
     var q = ro + rd * t;
     if (o.hit) { q = o.at + u.depth.x * taps[k]; }
     let d = model(q);
     o.evaluations += 1.0;
     if (!o.hit) {
-      if (abs(d) < u.depth.x) { o.hit = true; o.at = q; o.along = t; }
-      // inside the solid on coming into the region: the ray met the surface in a region before this one
+      // past a skin as the whole model is marched (marched). A region's wall may lie as
+      // near a skin as anything, so the first place in a region is treated like any
+      // other: which side the ray is on there is the side of that place.
+      if (touching) {
+        touching = false;
+        if (d * medium < 0.0) { o.hit = true; }
+        else { if (medium == 0.0) { medium = sign(d); } t += abs(d) * u.size.w; if (t > tf) { break; } }
+      }
+      // inside the solid on coming into the region, however little: the ray met the
+      // surface in a region before this one
       else if (i == 0 && d < 0.0 && !outside) { break; }
-      else { t += abs(d) * u.size.w; if (t > tf) { break; } }
+      else if (abs(d) < u.depth.x) {
+        touching = true; o.at = q; o.along = t;
+        if (medium == 0.0) { medium = sign(d); }
+        t += 2.0 * u.depth.x;
+      }
+      else { medium = sign(d); t += abs(d) * u.size.w; if (t > tf) { break; } }
     } else { n += taps[k] * d; k++; if (k == 4) { break; } }
   }
   o.normal = normalize(n);
@@ -817,6 +843,7 @@ fn walk(at: vec4f) -> Walked {
   w.entered = true;
   var taps = array<vec3f, 4>(vec3f(1, -1, -1), vec3f(-1, -1, 1), vec3f(-1, 1, -1), vec3f(1, 1, 1));
   var t = tn; var hit = false; var h = vec3f(0); var n = vec3f(0); var k = 0;
+  var touching = false; var medium = 0.0;
   for (var i = 0; i < 400; i++) {
     var q = ro + rd * t;
     if (hit) { q = h + u.depth.x * taps[k]; }
@@ -824,8 +851,16 @@ fn walk(at: vec4f) -> Walked {
     let d = model(q, &f, &ft, &cost, table, u.grid.xyz, u.grid.w, u.cells.xyz);
     w.evaluations += 1.0; w.work += vec2f(cost);
     if (!hit) {
-      if (abs(d) < u.depth.x) { hit = true; h = q; }
-      else { t += abs(d) * u.size.w; if (t > tf) { break; } }
+      // past a skin, as the picture is marched (marched)
+      if (touching) {
+        touching = false;
+        if (d * medium < 0.0) { hit = true; }
+        else { if (medium == 0.0) { medium = sign(d); } t += abs(d) * u.size.w; if (t > tf) { break; } }
+      } else if (abs(d) < u.depth.x) {
+        touching = true; h = q;
+        if (medium == 0.0) { medium = sign(d); }
+        t += 2.0 * u.depth.x;
+      } else { medium = sign(d); t += abs(d) * u.size.w; if (t > tf) { break; } }
     } else { n += taps[k] * d; k++; if (k == 4) { break; } }
   }
   if (!hit) { return w; }

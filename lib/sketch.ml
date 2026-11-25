@@ -266,12 +266,53 @@ let extrude ?u ?v ?w ?(holes = []) ?(chamfer_lo = 0.) ?(chamfer_hi = 0.) ~lo ~hi
   let pulled = if chamfer_hi > 0. then G.intersection pulled (slant "top chamfer" chamfer_hi (E.sub w (E.const hi))) else pulled in
   if chamfer_lo > 0. then G.intersection pulled (slant "bottom chamfer" chamfer_lo (E.sub (E.const lo) w)) else pulled
 
+(* An outline that is to be turned about the axis, with its sides that lie on the axis
+   taken off it. A profile is often closed along the axis: a solid of revolution with no
+   bore. That side is no face of the solid, which is whole across the axis; but as a
+   side of the outline it has its distance, zero on the axis, and the solid would have a
+   thread of nothing down its middle, which shows as a rod in a hole it is cut as.
+
+   So each run of sides on the axis is replaced by three that pass on the other side
+   of it, where no point is ever asked about: the side before goes straight on across
+   the axis, the side after is come to straight from across it, and a line joins the
+   two. How far across is kept short enough that the two do not cross. The solid's
+   surface is the same; inside it, near the axis, the field is less than the true
+   distance, and no longer nothing. *)
+let off_axis (sk : t) : t =
+  let n = Array.length sk in
+  let on_axis (s : span) = s.arc = None && Float.abs (fst s.a) <= 1e-9 && Float.abs (fst s.b) <= 1e-9 in
+  if not (Array.exists on_axis sk) || Array.for_all on_axis sk then sk
+  else
+    (* start from a side that is not on the axis and comes after one that is: runs are then whole *)
+    let first = let rec find i = if on_axis sk.((i + n - 1) mod n) && not (on_axis sk.(i)) then i else find (i + 1) in find 0 in
+    let widest = Array.fold_left (fun m (s : span) -> Float.max m (Float.max (fst s.a) (fst s.b))) 0. sk in
+    let rec go i left acc =
+      if left = 0 then List.rev acc
+      else
+        let s = sk.((first + i) mod n) in
+        if not (on_axis s) then go (i + 1) (left - 1) (s :: acc)
+        else
+          (* the run from here: it ends where a side leaves the axis *)
+          let rec last j = if on_axis sk.((first + j + 1) mod n) then last (j + 1) else j in
+          let j = last i in
+          let before = sk.((first + i + n - 1) mod n) and after = sk.((first + j + 1) mod n) and e = sk.((first + j) mod n) in
+          let tin = tangent before before.b and tout = tangent after after.a in
+          if fst tin >= -1e-9 || fst tout <= 1e-9 then fail "%s meets the axis along it: a side that ends on the axis has to come to it from beside it" s.name;
+          (* how far across: half the outline's width, less where the two sides would meet *)
+          let apart = Float.abs (snd s.a -. snd e.b) and lean = Float.abs (snd tin /. fst tin) +. Float.abs (snd tout /. fst tout) in
+          let across = Float.min (0.5 *. widest) (0.4 *. apart /. Float.max lean 1e-9) in
+          let p' = s.a ++ (across /. -.fst tin *. fst tin, across /. -.fst tin *. snd tin) and q' = e.b -- (across /. fst tout *. fst tout, across /. fst tout *. snd tout) in
+          let line a b = { name = "across the axis"; a; b; arc = None } in
+          go (j + 1) (left - (j - i + 1)) (line q' e.b :: line p' q' :: line s.a p' :: acc)
+    in
+    make (go 0 n [])
+
 (* The profile turned about the z axis: drawn in (distance from the axis, z). The field
    is still the distance: the nearest point of a turned solid lies in the same half-plane
    through the axis. *)
 let revolve ?(holes = []) outer =
   keep ~turned:true (outer :: holes);
-  profile ~u:(E.sqrt (E.add (E.square E.x) (E.square E.y))) ~v:E.z ~holes outer
+  profile ~u:(E.sqrt (E.add (E.square E.x) (E.square E.y))) ~v:E.z ~holes:(List.map off_axis holes) (off_axis outer)
 
 (* ---- Lofts ---- *)
 

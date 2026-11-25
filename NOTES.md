@@ -166,7 +166,7 @@ The server looks at the design's code a few times a second, and runs `mk52 refre
 | `embed/embed.ml` | 171 | a project built with no OCaml installed: the builder that carries the compiler. It loads a project's files itself, lists its functions, builds one by name, or stays loaded and builds one after another |
 | `tools/release.sh` | | a release assembled: the command, the builder, the interfaces it reads code against, the page, and the kernel's code to read |
 | `web/view.html` | 1174 | the page: its shaders (the march, a region's box, lines and dots, the counting maps), the drawing, the camera, the lists, the mouse |
-| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 236 checks (`dune test`, 15 s), and mk49's experiments |
+| `models/`, `test/`, `experiments/`, `bench/` | | the kernel's test shapes, its 242 checks (`dune test`, 15 s), and mk49's experiments |
 
 ## Not there
 

@@ -29,6 +29,9 @@
                                      looks straight down) distance=1.5 (domain diagonals
                                      from the target) target=x,y,z edges mesh paint
                                      size=800x600 out=file.png
+     mk52 skins <model>              its faces of no thickness: where two faces lie on one
+                                     surface with air on both sides, which shows as a
+                                     flaw and says a cut should go a little further
      mk52 clash <model> [other]      whether its parts run into each other, touch, or are
                                      nearer than gap=0.3: every pair of them, and its
                                      bought parts against them; or its parts against
@@ -70,7 +73,7 @@
    design folder is one with the file mk52.design in it. *)
 open Mk52
 
-let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | clash <model> [other model] [gap=0.3] | section <model> x=|y=|z=<number> [the others from:to] [paint] [text] [width=] [columns=] [out=] | new <project> <file> | brief <model> | mcp | install"
+let usage = "mk52 init | open | view <model> | models [shapes] | close <model> ... | status | stop | extract <model> [32 | 64 | 128] | mesh <model> [32 | 64 | 128 | 256] [raw] | outline <model> [out=file.dxf] | picture <model> [yaw= pitch= distance= target= edges mesh size= out=] | skins <model> | clash <model> [other model] [gap=0.3] | section <model> x=|y=|z=<number> [the others from:to] [paint] [text] [width=] [columns=] [out=] | new <project> <file> | brief <model> | mcp | install"
 let home = Place.home ()
 let command = Place.command ()
 
@@ -236,6 +239,7 @@ let () =
         Out_channel.with_open_bin out (fun oc -> output_string oc dxf);
         print_endline text;
         print_endline (if Filename.is_relative out then Filename.concat (Sys.getcwd ()) out else out)
+    | [ "skins"; name ] -> print_endline (Project.skins (Project.model name))
     | "clash" :: name :: options ->
         let limit = List.find_map (fun o -> if String.length o > 4 && String.sub o 0 4 = "gap=" then Some (match float_of_string_opt (String.sub o 4 (String.length o - 4)) with Some v when v >= 0. -> v | _ -> failwith "gap is a length, as gap=0.3") else None) options in
         let against = match List.filter (fun o -> not (String.contains o '=')) options with [] -> None | [ other ] -> Some (Project.model other) | _ -> failwith "after the model: another model to hold it against, and gap=0.3" in

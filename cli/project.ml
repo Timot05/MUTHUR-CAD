@@ -501,6 +501,24 @@ let section_text ?(cols = 100) (m : Emit.t) (k : cut) =
   if parts = [] then Buffer.add_string b "Nothing is solid in it.\n";
   Buffer.contents b
 
+(* ---- Skins ---- *)
+
+(* A model's skins (Skin), said: each with the two faces it lies between, about how
+   large it is, and where. *)
+let skins ?depth (m : Emit.t) =
+  match Skin.find ?depth ~lo:m.lo ~hi:m.hi m.built.graph with
+  | [] -> Printf.sprintf "%s: no skins. Nowhere do two of its faces lie on one surface with air on both sides." m.name
+  | found ->
+      String.concat "\n"
+        (Printf.sprintf "%s: %s, a face of no thickness with air on both sides. Each is where two faces lie on one surface: have one of them go a little further (a cut started inside what it cuts, or ended beyond it)." m.name
+           (match List.length found with 1 -> "1 skin" | n -> Printf.sprintf "%d skins" n)
+        :: List.map
+             (fun (f : Skin.found) ->
+               let a, b = f.between in
+               let span = Array.map2 ( -. ) f.hi f.lo in
+               Printf.sprintf "  %s: at (%.4g, %.4g, %.4g), about %.3g by %.3g by %.3g" (if a = b then "on " ^ a else a ^ " | " ^ b) f.at.(0) f.at.(1) f.at.(2) span.(0) span.(1) span.(2))
+             found)
+
 (* ---- Clashes ---- *)
 
 (* A model's parts as solids, each with its name; and its bought parts as the points

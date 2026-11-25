@@ -449,6 +449,37 @@ let builder () =
   let has part = let n = String.length part in let rec at i = i + n <= String.length err && (String.sub err i n = part || at (i + 1)) in at 0 in
   check "builder: a file that does not compile is said, with the place" (code <> 0 && has "wrong.ml\", line 1" && has "string") err
 
+(* Faces of no thickness. A ray is marched past one to the surface behind it
+   (Render.marched). A pocket cut exactly level with a plate's top leaves one across its
+   mouth, which is found with its faces, and a plate alone has none (Skin). And a profile
+   turned about the axis it is closed along is whole across the axis: the field there is
+   well inside, not nothing (Sketch.revolve). *)
+let skins () =
+  (* along a ray: a skin at 5, where the field only touches zero, and a solid from 8 *)
+  let value t = Float.min (Float.abs (t -. 5.)) (8. -. t) in
+  let found = Render.marched ~eps:1e-3 ~step:1. ~from:0. ~until:20. value in
+  check "skins: a ray goes past a skin to the surface behind it" (match found with Some t -> Float.abs (t -. 8.) < 0.01 | None -> false) (match found with Some t -> string_of_float t | None -> "nothing");
+  let inside = Render.marched ~eps:1e-3 ~step:1. ~from:9. ~until:20. (fun t -> Float.max (8. -. t) (t -. 12.)) in
+  check "skins: from inside a solid a ray still meets its far side" (match inside with Some t -> Float.abs (t -. 12.) < 0.01 | None -> false) (match inside with Some t -> string_of_float t | None -> "nothing");
+  let plate () = Sketch.extrude ~lo:0. ~hi:6. (Sketch.circle "edge" (0., 0.) 20.) in
+  let pocket = Graph.subtract (plate ()) (Sketch.extrude ~lo:3. ~hi:6. (Sketch.circle "pocket" (0., 0.) 8.)) in
+  let lo = [| -21.7; -21.6; -2.1 |] and hi = [| 21.8; 21.9; 8.4 |] in
+  let said l = String.concat "; " (List.map (fun (f : Skin.found) -> Printf.sprintf "%s | %s in %d cells at z = %.3f" (fst f.between) (snd f.between) f.cells f.at.(2)) l) in
+  let found = Skin.find ~lo ~hi pocket in
+  check "skins: a pocket cut level with the top leaves one across its mouth, and it is found"
+    (found <> [] && List.for_all (fun (f : Skin.found) -> Float.abs (f.at.(2) -. 6.) < 1e-6) found && List.exists (fun (f : Skin.found) -> f.hi.(0) -. f.lo.(0) > 10.) found)
+    (said found);
+  check "skins: a plate alone has none" (Skin.find ~lo ~hi (plate ()) = []) (said (Skin.find ~lo ~hi (plate ())));
+  let deeper = Graph.subtract (plate ()) (Sketch.extrude ~lo:3. ~hi:7. (Sketch.circle "pocket" (0., 0.) 8.)) in
+  check "skins: nor has the pocket cut on past the top" (Skin.find ~lo ~hi deeper = []) (said (Skin.find ~lo ~hi deeper));
+  (* a rod turned from a profile closed along the axis: x 0..5, z 0..10 *)
+  let rod = Sketch.revolve Sketch.(start (0., 0.) |> line "foot" (5., 0.) |> line "side" (5., 10.) |> line "head" (0., 10.) |> close ~name:"axis") in
+  let p = Prog.compile rod in
+  let v x = Prog.value p (Prog.ctx p) (Prog.whole p) x in
+  check "skins: a profile closed along its axis is whole across it, and its surface where it was"
+    (v [| 0.; 0.; 5. |] < -1. && Float.abs (v [| 5.; 0.; 5. |]) < 1e-9 && Float.abs (v [| 2.; 0.; 5. |] +. 3.) < 1e-9 && Float.abs (v [| 0.; 7.; 5. |] -. 2.) < 1e-9 && Float.abs (v [| 1.; 0.; 10. |]) < 1e-9)
+    (Printf.sprintf "on the axis %.4f, on the side %.2g, 3 inside it %.4f, 2 outside it %.4f, on the head %.2g" (v [| 0.; 0.; 5. |]) (v [| 5.; 0.; 5. |]) (v [| 2.; 0.; 5. |]) (v [| 0.; 7.; 5. |]) (v [| 1.; 0.; 10. |]))
+
 let () =
   List.iter set Models.Sets.all;
   List.iter (fun (c : Models.Tricky.case) -> extraction ~hard:(List.mem c.name hard) c.name ~lo:c.lo ~hi:c.hi (c.graph ()) c.expected [ 6; 7 ]) Models.Tricky.cases;
@@ -466,4 +497,5 @@ let () =
   cuts ();
   clashes ();
   builder ();
+  skins ();
   if !failures > 0 then (Printf.printf "%d failures\n" !failures; exit 1)

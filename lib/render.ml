@@ -13,6 +13,32 @@
      made it, and a light grey where that has none.
    - Edges: the extraction's curves, dark where seen and faint where hidden. *)
 
+(* A ray marched to the model's surface: from [from] to [until] along it, [value] the
+   field at a distance along the ray, [step] how far a value lets the ray go on. The
+   distance of the first surface, if it meets one.
+
+   A surface is where the field changes sign, not only where it comes to nothing. Two
+   faces that lie on one surface (a cut that ends level with another face, say) leave a
+   skin there: the field touches zero and has air on both sides. So where the field is
+   within [eps] of zero the ray looks [2 eps] on: it has met a surface if it is on the
+   other side there, and otherwise goes on from there. What is thinner than that is not
+   seen. Marching is from inside the solid too, where the box cuts it: a cut is left
+   open. *)
+let marched ?(most = 400) ~eps ~step ~from ~until value =
+  let rec go t side left =
+    if left = 0 || t > until then None
+    else
+      let v = value t in
+      if Float.abs v >= eps then go (t +. (Float.abs v *. step)) (if v > 0. then 1. else -1.) (left - 1)
+      else
+        (* not yet known which side it is on (the ray starts here): the side of where it is *)
+        let side = if side <> 0. then side else if v > 0. then 1. else if v < 0. then -1. else 0. in
+        let beyond = value (t +. (2. *. eps)) in
+        if side *. beyond < 0. then Some t
+        else go (t +. (2. *. eps) +. (Float.abs beyond *. step)) (if side <> 0. then side else if beyond > 0. then 1. else -1.) (left - 1)
+  in
+  go from 0. most
+
 type camera = { yaw : float; pitch : float; dist : float; target : float array option }
 
 type t = { w : int; h : int; rgb : Bytes.t; depth : float array  (** along the view, per pixel; infinity where nothing is *) }
@@ -71,13 +97,10 @@ let model ?(w = 800) ?(h = 600) ?colour ~camera ~lo ~hi (g : Graph.t) =
         tn := Float.max !tn (Float.min t0 t1);
         tf := Float.min !tf (Float.max t0 t1)
       done;
-      let t = ref !tn and left = ref 400 and hit = ref false in
-      while (not !hit) && !left > 0 && !t <= !tf do
-        for i = 0 to 2 do x.(i) <- v.ro.(i) +. (!t *. rd.(i)) done;
-        let d = Float.abs (Prog.value p c (Octree.state tree x) x) in
-        if d < eps then hit := true else (t := !t +. (d *. step); decr left)
-      done;
-      if !hit then begin
+      let at t = for i = 0 to 2 do x.(i) <- v.ro.(i) +. (t *. rd.(i)) done in
+      let found = marched ~eps ~step ~from:!tn ~until:!tf (fun t -> at t; Prog.value p c (Octree.state tree x) x) in
+      Option.iter at found;
+      if found <> None then begin
         let s = Prog.eval p c (Octree.state tree x) x in
         let n = s.d.g in
         let ln = sqrt (dot n n) in

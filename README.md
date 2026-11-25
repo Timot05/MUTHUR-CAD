@@ -15,7 +15,7 @@ It is an implicit kernel: a solid is a function of space, negative inside and po
 - **Parts as code.** A part is a function that returns a solid. Features are named, nest, and sit in frames, so a feature is moved by moving its frame.
 - **A page that follows your editor.** Every time a file is saved the project is built again and the page redraws what is open, on the graphics card.
 - **Pictures and cuts without the page.** `mk52 picture` and `mk52 section` are made by the kernel itself, so they work in a terminal, in a script, or for an AI agent.
-- **Checks.** `mk52 clash` says which parts of an assembly run into each other, touch, or come too near. `mk52 extract` finds every edge and corner and flags what looks unintended.
+- **Checks.** `mk52 clash` says which parts of an assembly run into each other, touch, or come too near. `mk52 skins` finds faces of no thickness, where a cut did not go quite far enough. `mk52 extract` finds every edge and corner and flags what looks unintended.
 - **Things to take away.** An STL mesh (`mk52 mesh`), and a DXF outline of a flat part such as a circuit board (`mk52 outline`).
 - **Bought parts in place.** A STEP or STL file from a maker is shown with the model, where the code puts it.
 - **Tools for AI agents.** The same kernel is offered to an agent as tools, so it can look at what it has built.
@@ -97,7 +97,7 @@ mk52 section lamp.base y=0
 
 ![The same part cut where y is 0](docs/lamp-cut.png)
 
-The boss starts 1 mm inside the plate on purpose. Two solids that end on exactly the same surface leave a skin of no thickness between them, which shows as a flaw; overlapping them a little avoids it.
+The boss starts 1 mm inside the plate on purpose. Where two faces lie on exactly the same surface, a cut that ends level with another face for one, they leave a skin of no thickness. mk52 does not draw such a skin, and `mk52 skins` finds them and names the two faces; but it is cleaner to have one face go a little further than the other, as here.
 
 ## How a design is laid out
 
@@ -138,6 +138,7 @@ What there is to build with is the kernel's own code, which a design folder reac
 | `mk52 picture <model> [...]` | a picture made by the kernel, with no page and no graphics card: a PNG whose path is printed. `yaw=` `pitch=` `distance=` `target=x,y,z` `edges` `mesh` `paint` (each part in its own colour) `size=800x600` `out=` |
 | `mk52 extract <model> [32\|64\|128]` | its edges and corners, printed with every flag, and drawn in the page if the model is open |
 | `mk52 outline <model> [out=file.dxf]` | the outline of a flat part, a board's: the edges round its top, holes too, as the lines, arcs and circles they are, in a DXF file in mm |
+| `mk52 skins <model>` | its faces of no thickness: where two faces lie on one surface with air on both sides, each with the two faces and where |
 | `mk52 clash <model> [other] [gap=0.3]` | whether its parts run into each other, touch, or are nearer than the gap: every pair, and its bought parts against them; or its parts against another model's. What a design says is meant (`Clash.allow`) is listed apart |
 | `mk52 section <model> z=<n>` | a cut through it where that coordinate (`x=`, `y=` or `z=`) is that number: what is solid, each part in a colour of its own, with a scale; the other two `from:to` to look closer; `text` for the cut as letters |
 | `mk52 mesh <model> [cells] [raw]` | its surface as even triangles attached to its creases and corners: an STL file, what the mesh is like, and a picture |
@@ -146,7 +147,7 @@ What there is to build with is the kernel's own code, which a design folder reac
 
 ## For AI agents
 
-`mk52 init` writes a `.mcp.json` in the design folder, which offers the kernel to an agent as tools: `picture`, `section`, `clash`, `kernel_probe` (the solid's value at points), `kernel_extract`, `viewer_state` (what you have picked in the page) and `feature_brief` (how to work on one function). An agent works in your editor's files and looks at the result through these, without the page.
+`mk52 init` writes a `.mcp.json` in the design folder, which offers the kernel to an agent as tools: `picture`, `section`, `clash`, `skins`, `kernel_probe` (the solid's value at points), `kernel_extract`, `viewer_state` (what you have picked in the page) and `feature_brief` (how to work on one function). An agent works in your editor's files and looks at the result through these, without the page.
 
 ## Two ways to build a design
 

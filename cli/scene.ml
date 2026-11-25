@@ -224,14 +224,9 @@ let pick name view o d =
   done;
   let diag = sqrt (Array.fold_left ( +. ) 0. (Array.map2 (fun l h -> (h -. l) *. (h -. l)) m.lo m.hi)) in
   let at t = Array.mapi (fun a v -> v +. (t *. d.(a))) o in
-  let rec march t k =
-    if t > !tf || k = 0 then None
-    else
-      (* from inside the solid too: the box's cut is open, as in the shader *)
-      let v = Float.abs (Prog.value p c whole (at t)) in
-      if v < 1e-6 *. diag then Some (at t) else march (t +. (v /. graph.lip)) (k - 1)
-  in
-  match if !tn >= !tf then None else march !tn 4000 with
+  (* as the pictures are marched (Render.marched): to a surface, past a skin *)
+  let found () = Option.map at (Render.marched ~most:4000 ~eps:(1e-6 *. diag) ~step:(1. /. graph.lip) ~from:!tn ~until:!tf (fun t -> Prog.value p c whole (at t))) in
+  match if !tn >= !tf then None else found () with
   | None -> Json.Obj [ ("hit", Json.Bool false) ]
   | Some x ->
       let s = Prog.eval p c whole x in
